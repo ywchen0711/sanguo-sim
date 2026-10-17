@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>三國志 群雄模擬 · Three Kingdoms Chronicle</title>
+  <meta name="description" content="五百名三國武將，一個自己運轉的天下：內政、外交、戰爭全自動模擬。 A self-running Three Kingdoms simulation with 500 generals.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700;900&family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+  <header id="top">
+    <div class="brand"><h1 id="title">三國志</h1><span id="subtitle">群雄模擬</span></div>
+    <div id="date"></div>
+    <div id="ctl"></div>
+  </header>
+  <main>
+    <section id="mapbox">
+      <canvas id="map"></canvas>
+      <div id="tip" hidden></div>
+      <div id="legend"></div>
+      <canvas id="chart"></canvas>
+    </section>
+    <aside id="side">
+      <nav id="tabs"></nav>
+      <div id="pane"></div>
+    </aside>
+  </main>
+  <div id="modal" hidden></div>
+  <script type="module" src="js/ui/app.js?v=1"></script>
+  <script src="/hub.js" data-pos="top-left" defer></script>
+</body>
+</html>
