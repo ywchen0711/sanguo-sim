@@ -100,3 +100,12 @@ h3 { font-size: 15px; color: var(--gold); margin: 16px 0 6px; letter-spacing: 2p
   #side { border-left: 0; border-top: 1px solid var(--line); min-height: 70vh; }
   #legend { bottom: 102px; }
 }
+
+/* treasures, spells, hidden generals */
+.stat .plus { color: #7fd08a; font-size: 11px; margin-left: 2px; }
+.item { font-size: 14px; margin: 3px 0; }
+.item small, small.dim, .dim { color: var(--dim); }
+.tag.item { border-color: #8a6a2a; color: var(--gold2); cursor: default; }
+.tag.spell { border-color: #6a5aa8; color: #c8b8ff; cursor: default; }
+.hiddenTag { color: #ff9ad8; font-weight: 700; }
+#ndesc { color: var(--dim); font-size: 14px; min-height: 2.6em; }

@@ -1,6 +1,6 @@
 // The map: an ink-dark land with soft faction territories, rivers, roads, cities and the month's campaigns.
-import { citiesOf } from '../sim/engine.js';
-import { nameIn } from '../sim/text.js';
+import { citiesOf } from '../sim/engine.js?v=2';
+import { nameIn } from '../sim/text.js?v=2';
 
 // rough coastline (the sea lies east and south of it) and the great rivers, in map units (0-100)
 const COAST = [[96, 0], [97, 10], [92, 18], [88, 27], [93, 33], [90, 40], [89, 47], [94, 56], [97, 63], [96, 72], [94, 80], [86, 88], [70, 95], [55, 98], [42, 104], [100, 104], [100, 0]];

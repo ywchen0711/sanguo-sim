@@ -1,7 +1,8 @@
 // The page: runs the simulation month by month and shows the map, the chronicle, the warlords, the generals and the cities.
-import { newGame, step, citiesOf, gensOf, power, capacity } from '../sim/engine.js';
-import { fmt, dateStr, nameIn, romanize } from '../sim/text.js';
-import { makeView, drawMap, cityAt, drawChart, resetMap } from './map.js';
+import { newGame, step, citiesOf, gensOf, power, capacity, heldBy } from '../sim/engine.js?v=2';
+import { fmt, dateStr, nameIn, romanize, itemName, spellName } from '../sim/text.js?v=2';
+import { SCENARIOS, SCEN } from '../data/scenarios.js';
+import { makeView, drawMap, cityAt, drawChart, resetMap } from './map.js?v=2';
 
 // ---------------------------------------------------------------- language
 const q = new URLSearchParams(location.search);
@@ -27,6 +28,9 @@ const T = {
     'AD 190. Dong Zhuo holds the emperor hostage, and warlords rise across the land. Five hundred generals will come of age, serve, betray, fight and grow old. Who will unite the realm this time? Everything happens on its own: just watch history unfold.'],
   unified: ['天下統一', 'The Realm United'], undecided: ['天下未定', 'The Realm Remains Divided'], keepWatching: ['繼續看年表', 'Keep reading'], years: ['年', 'years'],
   wars: ['場戰役', 'battles'], duelsN: ['次一騎討', 'duels'], fallenN: ['個勢力滅亡', 'warlords fell'], months: ['月', ''], ofAge: ['登場', 'comes of age'],
+  scenario: ['劇本', 'Scenario'], events: ['事件', 'Events'], treasures: ['寶物', 'Items'], spells: ['法術', 'Spells'], gear: ['寶物', 'Treasures'],
+  treasury: ['府庫中的寶物', 'In the treasury'], unknown: ['下落不明', 'Whereabouts unknown'], holder: ['持有', 'Held by'], hiddenGen: ['隱藏武將', 'Hidden general'],
+  slots: { w: ['武器', 'Weapon'], h: ['坐騎', 'Horse'], b: ['書籍', 'Book'], t: ['寶物', 'Treasure'] },
   tasks: { farm: ['開墾', 'Farming'], comm: ['商業', 'Commerce'], def: ['城防', 'Walls'], morale: ['巡察', 'Patrol'], train: ['訓練', 'Training'], draft: ['徵兵', 'Drafting'], reward: ['褒賞', 'Rewards'], search: ['搜索', 'Searching'], recruitGen: ['登用', 'Recruiting'] },
 };
 const t = (k) => (T[k] ? T[k][lang === 'en' ? 1 : 0] : k);
@@ -39,9 +43,9 @@ const $ = (s) => document.querySelector(s);
 let G = null, speed = 0, acc = 0, dirty = true, ui = { tab: 'chron', sel: null, gen: null, fac: null, filter: 'major', recentWars: [], gq: '', gstatus: 'serving', gfac: '', gsort: 'total' };
 const SPEEDS = [1, 3, 8, 24, 60];       // months per second
 let speedIx = 1;
-function start(seed, lifespan) {
-  G = newGame({ seed, lifespan }); resetMap(); ui = { ...ui, sel: null, gen: null, fac: null, recentWars: [] }; speed = 0; dirty = true;
-  const u = new URLSearchParams(location.search); u.set('seed', G.seed); history.replaceState(null, '', '?' + u);   // shareable: the same seed replays the same history
+function start(seed, lifespan, scenario) {
+  G = newGame({ seed, lifespan, scenario }); resetMap(); ui = { ...ui, sel: null, gen: null, fac: null, recentWars: [] }; speed = 0; dirty = true;
+  const u = new URLSearchParams(location.search); u.set('seed', G.seed); u.set('sc', G.scenario); history.replaceState(null, '', '?' + u);   // shareable: the same seed and scenario replay the same history
   render();
 }
 
@@ -78,7 +82,7 @@ function drawAll() {
 
 // ---------------------------------------------------------------- header and controls
 function renderHeader() {
-  $('#title').textContent = t('title'); $('#subtitle').textContent = t('subtitle');
+  $('#title').textContent = t('title'); $('#subtitle').textContent = `${t('subtitle')} · ${SCEN[G.scenario].name[lang === 'en' ? 1 : 0]}`;
   const alive = Object.values(G.factions).filter((f) => f.alive).length;
   $('#date').innerHTML = `${dateStr(G.year, G.month, lang)}<small>${lang === 'en' ? `${alive} warlords · seed ${G.seed}` : `群雄 ${alive} · 種子 ${G.seed}`}</small>`;
   const legend = Object.values(G.factions).filter((f) => f.alive).map((f) => [f, citiesOf(G, f.id).length]).sort((a, b) => b[1] - a[1]).slice(0, 8);
@@ -99,7 +103,7 @@ function renderControls() {
 function render() { renderControls(); renderTabs(); renderHeader(); renderPane(); }
 function renderTabs() {
   const tabs = $('#tabs'); tabs.innerHTML = '';
-  for (const k of ['chron', 'facs', 'gens', 'cities']) { const b = document.createElement('button'); b.textContent = t(k); b.className = ui.tab === k ? 'on' : ''; b.onclick = () => { ui.tab = k; ui.gen = null; ui.fac = null; if (k !== 'cities') ui.sel = ui.sel; renderTabs(); renderPane(); }; tabs.appendChild(b); }
+  for (const k of ['chron', 'facs', 'gens', 'cities', 'treasures']) { const b = document.createElement('button'); b.textContent = t(k); b.className = ui.tab === k ? 'on' : ''; b.onclick = () => { ui.tab = k; ui.gen = null; ui.fac = null; if (k !== 'cities') ui.sel = ui.sel; renderTabs(); renderPane(); }; tabs.appendChild(b); }
 }
 function renderPane() {
   const p = $('#pane'), keep = p.scrollTop;
@@ -108,6 +112,7 @@ function renderPane() {
   else if (ui.tab === 'chron') p.innerHTML = chronicle();
   else if (ui.tab === 'facs') p.innerHTML = factions();
   else if (ui.tab === 'gens') { p.innerHTML = generals(); bindGenFilters(); }
+  else if (ui.tab === 'treasures') p.innerHTML = treasures();
   else p.innerHTML = ui.sel != null ? cityCard(G.cities[ui.sel]) : cityList();
   p.querySelectorAll('[data-g]').forEach((e) => { e.onclick = (ev) => { ev.stopPropagation(); ui.gen = +e.dataset.g; ui.fac = null; renderPane(); $('#pane').scrollTop = 0; }; });
   p.querySelectorAll('[data-f]').forEach((e) => { e.onclick = (ev) => { ev.stopPropagation(); ui.fac = e.dataset.f; ui.gen = null; renderPane(); $('#pane').scrollTop = 0; }; });
@@ -126,10 +131,10 @@ const cityLink = (c) => `<span class="tag" data-c="${c.id}">${esc(CN(c.name))}</
 // the chronicle, newest first
 function chronicle() {
   const F = { major: (e) => e.level >= 2, all: () => true, war: (e) => e.kind === 'war' || e.kind === 'duel' || e.kind === 'fall' || e.kind === 'rebel', diplo: (e) => e.kind === 'diplo' || e.kind === 'defect' || e.key === 'surrender',
-    people: (e) => ['join', 'death', 'succession', 'appear', 'release'].includes(e.kind) };
+    people: (e) => ['join', 'death', 'succession', 'appear', 'release'].includes(e.kind), events: (e) => ['event', 'item', 'spell'].includes(e.kind) || e.key === 'hiddenAppear' };
   const list = [];
   for (let i = G.log.length - 1; i >= 0 && list.length < 300; i--) if (F[ui.filter](G.log[i])) list.push(G.log[i]);
-  const chips = ['major', 'all', 'war', 'diplo', 'people'].map((k) => `<span class="chip ${ui.filter === k ? 'on' : ''}" data-chip="${k}">${t(k)}</span>`).join('');
+  const chips = ['major', 'all', 'war', 'diplo', 'people', 'events'].map((k) => `<span class="chip ${ui.filter === k ? 'on' : ''}" data-chip="${k}">${t(k)}</span>`).join('');
   return `<div class="chips">${chips}</div>` + list.map((e) => {
     const col = e.fac && G.factions[e.fac] ? G.factions[e.fac].color : '#555', attr = e.g != null ? `data-g="${e.g}"` : e.city != null ? `data-c="${e.city}"` : '';
     return `<div class="ev lv${e.level} ${attr ? 'click' : ''}" ${attr} style="border-left-color:${col}"><span class="d">${dateStr(e.year, e.month, lang)}</span><span>${esc(fmt(e, lang))}</span></div>`;
@@ -141,7 +146,7 @@ function factions() {
   const dead = Object.values(G.factions).filter((f) => !f.alive).sort((a, b) => (b.died || 0) - (a.died || 0));
   return `<table><tr><th>${t('faction')}</th><th class="num">${t('nCities')}</th><th class="num">${t('nGens')}</th><th class="num">${t('troops')}</th><th class="num">${t('gold')}</th><th class="num">${t('food')}</th></tr>`
     + alive.map(({ f, cs, gs }) => `<tr class="row" data-f="${f.id}"><td>${swatch(f.id)}${esc(N(f.name))}</td><td class="num">${cs.length}</td><td class="num">${gs.length}</td><td class="num">${big(cs.reduce((s, c) => s + c.troops, 0))}</td><td class="num">${big(f.gold)}</td><td class="num">${big(f.food)}</td></tr>`).join('')
-    + `</table><h3>${t('fallen')}</h3><table>` + dead.map((f) => `<tr class="row dead" data-f="${f.id}"><td>${swatch(f.id)}${esc(N(f.name))}</td><td class="num">${t('peak')} ${f.peak}</td><td class="num">${f.died != null ? 190 + Math.floor(f.died / 12) : ''}</td></tr>`).join('') + '</table>';
+    + `</table><h3>${t('fallen')}</h3><table>` + dead.map((f) => `<tr class="row dead" data-f="${f.id}"><td>${swatch(f.id)}${esc(N(f.name))}</td><td class="num">${t('peak')} ${f.peak}</td><td class="num">${f.died != null ? G.start + Math.floor(f.died / 12) : ''}</td></tr>`).join('') + '</table>';
 }
 function facCard(f) {
   const cs = citiesOf(G, f.id), gs = gensOf(G, f.id).sort((a, b) => b.lead + b.war + b.int + b.pol + b.cha - (a.lead + a.war + a.int + a.pol + a.cha)), lord = G.gens[f.lord];
@@ -154,20 +159,22 @@ function facCard(f) {
     <span>${t('allies')}</span><span>${allies.map(facLink).join('') || t('none')}</span><span>${t('truce')}</span><span>${truces.map(facLink).join('') || t('none')}</span></div>
     <h3>${t('cities')} (${cs.length})</h3>${cs.map(cityLink).join('')}
     <h3>${t('gens')} (${gs.length})</h3>${gs.map(genLink).join('')}
+    ${G.items.some((it) => it.fac === f.id) ? `<h3>${t('treasury')}</h3>${G.items.filter((it) => it.fac === f.id).map((it) => `<span class="tag item">${esc(itemName(it.key, lang))}</span>`).join('')}` : ''}
     <h3>${t('deeds')}</h3>${deeds.map((e) => `<div class="ev lv${e.level}" style="border-left-color:${f.color}"><span class="d">${dateStr(e.year, e.month, lang)}</span><span>${esc(fmt(e, lang))}</span></div>`).join('')}</div>`;
 }
 // the 500 generals
 const total = (g) => g.lead + g.war + g.int + g.pol + g.cha;
 function generals() {
   const qq = ui.gq.trim().toLowerCase();
-  let list = G.gens.filter((g) => (!ui.gstatus || g.status === ui.gstatus) && (!ui.gfac || g.fac === ui.gfac) && (!qq || g.name.includes(ui.gq.trim()) || romanize(g.name).toLowerCase().includes(qq)));
+  const visible = G.gens.filter((g) => !(g.hidden && g.status === 'unborn'));
+  let list = visible.filter((g) => (!ui.gstatus || g.status === ui.gstatus) && (!ui.gfac || g.fac === ui.gfac) && (!qq || g.name.includes(ui.gq.trim()) || romanize(g.name).toLowerCase().includes(qq)));
   const key = ui.gsort;
   list.sort((a, b) => (key === 'name' ? a.name.localeCompare(b.name, lang === 'en' ? 'en' : 'zh-Hant') : key === 'age' ? a.born - b.born : key === 'total' ? total(b) - total(a) : b[key] - a[key]));
   const facOpts = Object.values(G.factions).filter((f) => f.alive).map((f) => `<option value="${f.id}" ${ui.gfac === f.id ? 'selected' : ''}>${esc(N(f.name))}</option>`).join('');
   const st = ['', 'serving', 'free', 'unborn', 'dead'].map((s) => `<option value="${s}" ${ui.gstatus === s ? 'selected' : ''}>${s ? t(s) : t('anyStatus')}</option>`).join('');
   const th = (k, label) => `<th class="num" data-sort="${k}" style="${ui.gsort === k ? 'color:var(--gold2)' : ''}">${label}</th>`;
   return `<div class="filters"><input id="gq" placeholder="${t('search')}" value="${esc(ui.gq)}"><select id="gs">${st}</select><select id="gf"><option value="">${t('anyFac')}</option>${facOpts}</select></div>
-    <div class="count">${list.length} / 500</div>
+    <div class="count">${list.length} / ${visible.length}</div>
     <table><tr><th data-sort="name">${t('name')}</th>${th('lead', t('lead'))}${th('war', t('warS'))}${th('int', t('int'))}${th('pol', t('pol'))}${th('cha', t('cha'))}${th('total', t('total'))}</tr>`
     + list.slice(0, 250).map((g) => `<tr class="row ${g.status === 'dead' ? 'dead' : ''}" data-g="${g.id}"><td>${swatch(g.status === 'serving' ? g.fac : null)}${esc(N(g.name))}</td><td class="num">${g.lead}</td><td class="num">${g.war}</td><td class="num">${g.int}</td><td class="num">${g.pol}</td><td class="num">${g.cha}</td><td class="num">${total(g)}</td></tr>`).join('') + '</table>';
 }
@@ -179,16 +186,27 @@ function bindGenFilters() {
 function genCard(g) {
   const statusTxt = g.status === 'serving' ? `${t('serving')}` : t(g.status), f = g.status === 'serving' ? g.fac : null;
   const isLord = f && G.factions[f].lord === g.id;
-  const bars = [['lead', t('lead')], ['war', t('warS')], ['int', t('int')], ['pol', t('pol')], ['cha', t('cha')]].map(([k, l]) => `<div class="stat"><span>${l}</span><span class="bar"><i style="width:${g[k]}%"></i></span><span class="num">${g[k]}</span></div>`).join('');
+  const bars = [['lead', t('lead')], ['war', t('warS')], ['int', t('int')], ['pol', t('pol')], ['cha', t('cha')]].map(([k, l]) => `<div class="stat"><span>${l}</span><span class="bar"><i style="width:${Math.min(100, g[k])}%"></i></span><span class="num">${g[k]}${g[k] > g.base[k] ? `<small class="plus">+${g[k] - g.base[k]}</small>` : ''}</span></div>`).join('');
+  const items = heldBy(G, g), bonus = (it) => Object.entries(it.fx).map(([k, v]) => `${t(k === 'war' ? 'warS' : k)}+${v}`).join(' ');
   const deeds = G.log.filter((e) => e.g === g.id || (e.p && Object.values(e.p).includes(g.name))).slice(-40).reverse();
   return `<button class="back" data-back="1">${t('back')}</button><div class="card"><h2>${esc(N(g.name))}${lang === 'en' ? ` <small style="font-size:16px;color:var(--dim)">${esc(g.name)}</small>` : ''}</h2>
     <div class="sub">${g.born}–${g.died}${g.status !== 'dead' && g.status !== 'unborn' ? ` · ${t('age')} ${G.year - g.born}` : ''}${g.status === 'unborn' ? ` · ${g.appear} ${t('ofAge')}` : ''}${isLord ? ` · ${t('lord')}` : ''}</div>
+    ${g.hidden ? `<div class="sub hiddenTag">✦ ${t('hiddenGen')}</div>` : ''}
     ${bars}
+    ${items.length ? `<h3>${t('gear')}</h3>${items.map((it) => `<div class="item"><b>${esc(itemName(it.key, lang))}</b> <small>${T.slots[it.slot][lang === 'en' ? 1 : 0]} · ${bonus(it)}</small></div>`).join('')}` : ''}
+    ${g.spells.length ? `<h3>${t('spells')}</h3>${g.spells.map((sp) => `<span class="tag spell">✧ ${esc(spellName(sp, lang))}</span>`).join('')}` : ''}
     <div class="kv"><span>${t('status')}</span><span>${statusTxt}</span><span>${t('faction')}</span><span>${f ? facLink(f) : '—'}</span>
     <span>${t('city')}</span><span>${g.status === 'dead' || g.status === 'unborn' ? '—' : cityLink(G.cities[g.city])}</span>
     ${f ? `<span>${t('loyalty')}</span><span>${g.loyalty}</span><span>${t('task')}</span><span>${g.task ? T.tasks[g.task][lang === 'en' ? 1 : 0] : '—'}</span>` : ''}
     <span>${t('merit')}</span><span>${g.merit}</span><span>${t('duels')}</span><span>${g.duelsWon}</span><span>${t('kills')}</span><span>${g.kills}</span></div>
     <h3>${t('deeds')}</h3>${deeds.map((e) => `<div class="ev lv${e.level}" style="border-left-color:${e.fac && G.factions[e.fac] ? G.factions[e.fac].color : '#555'}"><span class="d">${dateStr(e.year, e.month, lang)}</span><span>${esc(fmt(e, lang))}</span></div>`).join('') || t('none')}</div>`;
+}
+// every famous item: who has it, or which treasury, or nobody knows
+function treasures() {
+  const where = (it) => (it.holder != null ? genLink(G.gens[it.holder]) : it.fac ? facLink(it.fac) : `<span class="dim">${t('unknown')}</span>`);
+  const bonus = (it) => Object.entries(it.fx).map(([k, v]) => `${t(k === 'war' ? 'warS' : k)}+${v}`).join(' ');
+  const list = G.items.filter((it) => it.holder != null || it.fac || it.city != null);
+  return `<table><tr><th>${t('treasures')}</th><th></th><th>${t('holder')}</th></tr>` + list.map((it) => `<tr><td><b>${esc(itemName(it.key, lang))}</b><br><small class="dim">${bonus(it)}${it.teaches.length ? ' · ✧ ' + it.teaches.map((sp) => esc(spellName(sp, lang))).join(', ') : ''}</small></td><td class="dim">${T.slots[it.slot][lang === 'en' ? 1 : 0]}</td><td>${where(it)}</td></tr>`).join('') + '</table>';
 }
 // cities
 function cityList() {
@@ -210,11 +228,16 @@ function cityCard(c) {
 function modal(html) { const m = $('#modal'); m.innerHTML = `<div class="box">${html}</div>`; m.hidden = false; return m; }
 function showNew(first) {
   speed = 0; renderControls();
-  const m = modal(`<h2>${t('title')}</h2><p>${t('intro')}</p>
+  const cur = (G && G.scenario) || q.get('sc') || '190';
+  const m = modal(`<h2>${t('title')}</h2>
+    <label>${t('scenario')}</label><select id="nscen">${SCENARIOS.map((S) => `<option value="${S.id}" ${S.id === cur ? 'selected' : ''}>${S.id === 'heroes' ? '' : S.year + ' '}${S.name[lang === 'en' ? 1 : 0]}</option>`).join('')}</select>
+    <p id="ndesc"></p>
     <label>${t('seed')}</label><input id="nseed" type="number" value="${first && q.get('seed') ? +q.get('seed') : Math.floor(Math.random() * 99999)}">
     <label>${t('lifespan')}</label><select id="nlife"><option value="history">${t('hist')}</option><option value="long">${t('long')}</option></select>
     <div class="row2"><button class="btn go big" id="ngo">${t('start')}</button></div>`);
-  m.querySelector('#ngo').onclick = () => { m.hidden = true; start(+m.querySelector('#nseed').value || 1, m.querySelector('#nlife').value); speed = 1; renderControls(); };
+  const sel = m.querySelector('#nscen'), desc = () => { m.querySelector('#ndesc').textContent = SCEN[sel.value].desc[lang === 'en' ? 1 : 0]; };
+  sel.onchange = desc; desc();
+  m.querySelector('#ngo').onclick = () => { m.hidden = true; start(+m.querySelector('#nseed').value || 1, m.querySelector('#nlife').value, sel.value); speed = 1; renderControls(); };
 }
 function showEnd() {
   renderControls();
@@ -222,7 +245,7 @@ function showEnd() {
   const wars = G.log.filter((e) => e.kind === 'war').length, duels = G.log.filter((e) => e.kind === 'duel').length, fell = Object.values(G.factions).filter((x) => !x.alive).length;
   const m = modal(`<h2>${won ? t('unified') : t('undecided')}</h2>
     ${won ? `<div class="big" style="color:${f.color}">${esc(N(lord.name))} · ${dateStr(G.year, G.month, lang)}</div>` : ''}
-    <p>${G.year - 190} ${t('years')} · ${wars} ${t('wars')} · ${duels} ${t('duelsN')} · ${fell} ${t('fallenN')}</p>
+    <p>${G.year - G.start} ${t('years')} · ${wars} ${t('wars')} · ${duels} ${t('duelsN')} · ${fell} ${t('fallenN')}</p>
     <div class="row2"><button class="btn" id="ekeep">${t('keepWatching')}</button><button class="btn go" id="enew">${t('newGame')}</button></div>`);
   m.querySelector('#ekeep').onclick = () => { m.hidden = true; ui.tab = 'chron'; ui.filter = 'major'; render(); };
   m.querySelector('#enew').onclick = () => { m.hidden = true; showNew(); };
@@ -254,7 +277,7 @@ addEventListener('keydown', (e) => {
 
 // ---------------------------------------------------------------- go
 document.documentElement.lang = lang === 'en' ? 'en' : 'zh-Hant';
-start(+q.get('seed') || Math.floor(Math.random() * 99999));
+start(+q.get('seed') || Math.floor(Math.random() * 99999), undefined, q.get('sc') || '190');
 if (!q.get('seed')) showNew(true);
 requestAnimationFrame(frame);
-window.__sg = { get G() { return G; }, advance, setSpeed: (s) => { speed = s; } };   // for tests
+window.__sg = { get G() { return G; }, advance, setSpeed: (s) => { speed = s; }, showGen: (id) => { ui.gen = id; ui.fac = null; renderPane(); } };   // for tests

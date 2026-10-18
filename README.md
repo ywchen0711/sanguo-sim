@@ -23,6 +23,20 @@ by month, until someone unifies the realm (or the age of warlords drags on to 30
   一騎討 duels before the walls that can kill, captured officers who join, are released or executed, succession when a lord dies,
   rebellions by disloyal governors, factions that fall and the occasional warlord who rises again.
 
+## Scenarios, events, treasures and spells
+
+- **Six scenarios:** 190 群雄討董, 195 群雄割據, 200 官渡之戰, 208 赤壁之戰, 221 三國鼎立, and a what-if 英雄集結 where all 500 generals are alive at
+  once. Each sets the warlords, their cities, alliances and feuds, and where every general serves (`js/data/scenarios.js`). `?sc=208&seed=5` replays one.
+- **Random events** every month or so: locusts, plague (a healer stops it), floods, earthquakes, bumper harvests, bandits (a strong governor beats
+  them), caravans, omens, comets that foretell a lord's death, sages and training that raise stats, tournaments, sworn brothers, imperial edicts,
+  assassins and granary fires.
+- **Treasures (寶物):** 25 famous items — 青龍偃月刀, 方天畫戟, 赤兔馬, 的盧, 孫子兵法, 太平要術, 傳國玉璽 … — start with their historical owner or lie
+  hidden in a city until a searching officer finds them. They add to stats (a horse also helps escape capture), pass to whoever slays their owner
+  in a duel, go to the treasury when an owner dies, and the lord hands them out twice a year.
+- **Spells (法術):** 落雷, 妖術, 呼風喚雨, 八陣圖, 奇門遁甲, 幻術 and 治癒 change sieges; 諸葛亮, 于吉, 華佗, 司馬懿 … know them, immortals teach them
+  and books (太平要術, 遁甲天書, 青囊書, 兵法二十四篇) can be studied for them.
+- **Four hidden generals:** Jeff, Josh, Jasper and Erin may each turn up in any game at a random time and place, with a legendary sword and spells.
+
 ## The page
 
 - A map with soft faction territories, rivers, roads, cities (★ = where a lord sits) and the campaigns of the last few months
@@ -39,6 +53,8 @@ index.html, style.css
 js/data/generals.js     the 500 generals (one line each)
 js/data/world.js        cities, roads, the warlords of 190
 js/data/allegiance.js   who unaffiliated talents historically served
+js/data/scenarios.js    the six scenarios
+js/data/treasures.js    famous items, spells and the four hidden generals
 js/data/pinyin.js       pinyin for the English interface
 js/sim/engine.js        the simulation (no DOM: also runs in node)
 js/sim/text.js          the chronicle in Chinese or English, names in pinyin

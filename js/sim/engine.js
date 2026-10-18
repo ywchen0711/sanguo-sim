@@ -4,8 +4,10 @@
 //   const G = newGame({ seed, start: 190 });  step(G);  // one month
 //   G.log: the chronicle   G.cities / G.factions / G.gens: the world   G.over: the winner once China is unified
 import { GENERALS_RAW } from '../data/generals.js';
-import { CITIES, ROADS, FACTIONS_190 } from '../data/world.js';
+import { CITIES, ROADS } from '../data/world.js';
 import { PREFER } from '../data/allegiance.js';
+import { SCEN } from '../data/scenarios.js';
+import { ITEMS, SPELL_HOLDERS, HIDDEN } from '../data/treasures.js';
 
 // ---------------------------------------------------------------- random numbers (seeded, so a game can be replayed)
 export function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -19,8 +21,8 @@ export const date = (G) => `${G.year}年${G.month}月`;
 
 // ---------------------------------------------------------------- a new world
 export function newGame(o = {}) {
-  const seed = (o.seed ?? (Date.now() & 0x7fffffff)) >>> 0, r = rng(seed), start = 190;
-  const G = { seed, r, year: start, month: 1, t: 0, log: [], over: null, history: [], nextFac: 1, opts: { lifespan: o.lifespan || 'history' } };
+  const seed = (o.seed ?? (Date.now() & 0x7fffffff)) >>> 0, r = rng(seed), S = SCEN[o.scenario] || SCEN['190'], start = S.year;
+  const G = { seed, r, scenario: S.id, start, year: start, month: 1, t: 0, log: [], over: null, history: [], nextFac: 1, opts: { lifespan: o.lifespan || 'history' }, carry: S.carry || {}, items: [] };
   // cities and roads
   G.cities = CITIES.map(([name, x, y, size], id) => {
     const pop = Math.round((40 + size * 70 + r() * 40) * 1000);
@@ -32,40 +34,83 @@ export function newGame(o = {}) {
   for (const pair of ROADS.split(/\s+/).filter(Boolean)) { const [a, b] = pair.split('-').map((n) => byName[n]); if (!a || !b) throw new Error('bad road ' + pair); a.adj.push(b.id); b.adj.push(a.id); }
   // warlords
   G.factions = {};
-  for (const [id, name, lord, color, cities] of FACTIONS_190) {
+  for (const [id, name, lord, color, cities] of S.factions) {
     G.factions[id] = { id, name, lordName: lord, color, lord: null, alive: true, gold: 600 + cities.length * 350, food: 3000 + cities.length * 2500,
       rel: {}, allies: {}, truce: {}, capital: byName[cities[0]].id, born: G.t, peak: cities.length, aggr: 0.8 + r() * 0.5 };
     for (const n of cities) { const c = byName[n]; c.owner = id; c.troops = Math.round((5000 + c.size * 4000) * (0.8 + r() * 0.4)); c.train = 50 + Math.round(r() * 20); }
   }
   for (const c of G.cities) if (!c.owner) c.troops = Math.round((2000 + c.size * 1500) * (0.8 + r() * 0.4));
-  // Dong Zhuo holds the capital and the strongest army; the coalition hates him
-  for (const c of G.cities) if (c.owner === 'dong') c.troops = Math.round(c.troops * 1.4);
-  G.factions.dong.aggr = 0.6;
-  for (const f of Object.values(G.factions)) for (const g of Object.values(G.factions)) if (f !== g) f.rel[g.id] = f.id === 'dong' || g.id === 'dong' ? -40 : 0;
+  // 190: Dong Zhuo holds the capital and the strongest army, and the coalition hates him
+  if (S.dong) { for (const c of G.cities) if (c.owner === 'dong') c.troops = Math.round(c.troops * 1.4); G.factions.dong.aggr = 0.6; }
+  for (const f of Object.values(G.factions)) for (const g of Object.values(G.factions)) if (f !== g) f.rel[g.id] = S.dong && (f.id === 'dong' || g.id === 'dong') ? -40 : 0;
   const rel = (a, b, v) => { G.factions[a].rel[b] = v; G.factions[b].rel[a] = v; };
-  rel('liubei', 'gongsun', 60); rel('sun', 'yuanshu', 60); rel('cao', 'yuanshao', 40); rel('cao', 'liudai', 20); rel('liuyu', 'gongsun', -30); rel('yuanshao', 'gongsun', -30);
+  for (const [a, b, v] of S.rel || []) rel(a, b, v);
+  for (const [a, b] of S.ally || []) G.factions[a].allies[b] = G.factions[b].allies[a] = 36;
+  for (const [a, b] of S.truce || []) G.factions[a].truce[b] = G.factions[b].truce[a] = 12;
   // generals
   G.gens = GENERALS_RAW.trim().split('\n').map((line, id) => {
     const [name, born, died, lead, war, int, pol, cha, fac, city, kin] = line.split(',');
-    const deathYear = +died + (G.opts.lifespan === 'long' ? 8 + Math.floor(r() * 10) : 0);
-    return { id, name, born: +born, died: deathYear, deathMonth: 1 + Math.floor(r() * 12), lead: +lead, war: +war, int: +int, pol: +pol, cha: +cha,
-      fac0: fac === '-' ? null : fac, home: byName[city].id, kin: kin || null, appear: Math.max(start, +born + 15), appearMonth: 1 + Math.floor(r() * 12),
+    let b = +born, deathYear = +died + (G.opts.lifespan === 'long' ? 8 + Math.floor(r() * 10) : 0);
+    if (S.allStars) { b = start - 20 - Math.floor(r() * 25); deathYear = start + 25 + Math.floor(r() * 30); }     // what-if: everyone is alive at once
+    return { id, name, born: b, died: deathYear, deathMonth: 1 + Math.floor(r() * 12), lead: +lead, war: +war, int: +int, pol: +pol, cha: +cha,
+      base: { lead: +lead, war: +war, int: +int, pol: +pol, cha: +cha }, spells: (SPELL_HOLDERS[name] || []).slice(),
+      fac0: fac === '-' ? null : fac, home: byName[city].id, kin: kin || null, appear: S.allStars ? start : Math.max(start, b + 15), appearMonth: 1 + Math.floor(r() * 12),
       fac: null, city: byName[city].id, status: 'unborn', loyalty: 0, merit: 0, task: null, kills: 0, duelsWon: 0 };
   });
+  // the four hidden generals: each may turn up somewhere, some time, in any game
+  for (const [name, lead, war, int, pol, cha, sword, spells] of HIDDEN) {
+    const comes = r() < 0.6, ay = start + 1 + Math.floor(r() * 35), city = Math.floor(r() * G.cities.length);
+    G.gens.push({ id: G.gens.length, name, born: ay - 18, died: ay + 45 + Math.floor(r() * 15), deathMonth: 1 + Math.floor(r() * 12), lead, war, int, pol, cha,
+      base: { lead, war, int, pol, cha }, spells: [], spells0: spells, sword, hidden: true, fac0: null, home: city, kin: 'chenfam', appear: comes ? ay : 9999, appearMonth: 1 + Math.floor(r() * 12),
+      fac: null, city, status: 'unborn', loyalty: 0, merit: 0, task: null, kills: 0, duelsWon: 0 });
+  }
   G.byName = Object.fromEntries(G.gens.map((g) => [g.name, g]));
   for (const [fid, names] of Object.entries(PREFER)) for (const n of names.split(/\s+/)) { if (!G.byName[n]) throw new Error('allegiance: unknown general ' + n); G.byName[n].prefer = fid; }
-  for (const f of Object.values(G.factions)) f.lord = G.byName[f.lordName].id;
+  for (const f of Object.values(G.factions)) { const l = G.byName[f.lordName]; if (!l || l.died < start || l.appear > start) throw new Error(`${S.id}: lord ${f.lordName} is not alive`); f.lord = l.id; }
+  for (const n of Object.keys(S.who || {})) if (!G.byName[n]) throw new Error(`${S.id}: unknown general ${n}`);
   for (const g of G.gens) {
-    if (g.died < start || g.appear > start) continue;
-    const f = g.fac0 && G.factions[g.fac0];
-    if (f) { const c = G.cities[g.city].owner === f.id ? g.city : f.capital; serve(G, g, f.id, c, g.id === f.lord || sameKin(G, g, G.gens[f.lord]) ? 100 : 70 + Math.floor(r() * 25)); }
-    else { g.status = 'free'; }
+    if (g.died < start) { g.status = 'dead'; g.cause = 'before'; continue; }
+    if (g.appear > start) continue;
+    const fid = startFaction(G, S, g), f = fid && G.factions[fid];
+    if (f) {
+      const home = G.cities[g.city], near = citiesOf(G, f.id).sort((a, b2) => Math.hypot(a.x - home.x, a.y - home.y) - Math.hypot(b2.x - home.x, b2.y - home.y))[0];
+      const c = home.owner === f.id ? g.city : g.id === f.lord || S.id === '190' ? f.capital : near.id;
+      serve(G, g, f.id, c, g.id === f.lord || sameKin(G, g, G.gens[f.lord]) ? 100 : 70 + Math.floor(r() * 25));
+    } else { g.status = 'free'; }
   }
+  for (const f of Object.values(G.factions)) G.gens[f.lord].city = f.capital;
   for (const c of G.cities) if (c.owner) pickGovernor(G, c);
-  record(G, 'start', 'start', {}, null, 3);
+  // famous items: with their historical owner if he is around, otherwise hidden somewhere
+  G.items = ITEMS.map(([key, zh, en, slot, fx, holders, hideIn, teaches], id) => ({ id, key, zh, en, slot, fx, teaches: teaches || [], holder: null, fac: null, city: null }));
+  for (const it of G.items) {
+    const [, , , , , holders, hideIn] = ITEMS[it.id];
+    const h = holders.map((x) => (Array.isArray(x) ? x : [x])).find(([n, from = 0, to = 9999]) => { const g = G.byName[n]; return g && start >= from && start <= to && (g.status === 'serving' || g.status === 'free') && !holds(G, g, it.slot); });
+    if (h) give(G, it, G.byName[h[0]]);
+    else if (hideIn) it.city = hideIn === '*' ? Math.floor(r() * G.cities.length) : byName[hideIn].id;
+  }
+  record(G, 'start', 'start', { s: S.id }, null, 3);
   snapshot(G);
   return G;
 }
+// where a general serves when the scenario begins
+function startFaction(G, S, g) {
+  if (S.who && g.name in S.who) { const w = S.who[g.name]; return w !== '-' && G.factions[w] ? w : null; }
+  if (S.id === '190') return g.fac0 && G.factions[g.fac0] ? g.fac0 : null;
+  for (const f of Object.values(G.factions)) if (f.lord === g.id) return f.id;
+  if (g.kin) { const f = Object.values(G.factions).find((x) => G.gens[x.lord].kin === g.kin); if (f) return f.id; }
+  const pre = g.prefer && !g.prefer.startsWith('kin:') && G.factions[g.prefer] ? g.prefer : null;
+  if (S.allStars) return g.fac0 && G.factions[g.fac0] ? g.fac0 : pre;
+  if (g.fac0) { const c = G.factions[g.fac0] ? g.fac0 : G.carry[g.fac0]; if (c && c !== '-' && G.factions[c]) return pre || c; }
+  return pre;
+}
+// ---------------------------------------------------------------- items: stats are the base plus whatever a general carries
+export const heldBy = (G, g) => G.items.filter((it) => it.holder === g.id);
+const holds = (G, g, slot) => G.items.some((it) => it.holder === g.id && it.slot === slot);
+function refresh(G, g) { for (const k of STAT) g[k] = g.base[k]; for (const it of heldBy(G, g)) for (const k in it.fx) g[k] += it.fx[k]; }
+function give(G, it, g) { const prev = it.holder != null ? G.gens[it.holder] : null; it.holder = g.id; it.fac = null; it.city = null; if (prev) refresh(G, prev); refresh(G, g); }
+function stash(G, it, fid) { const prev = it.holder != null ? G.gens[it.holder] : null; it.holder = null; it.fac = fid; it.city = null; if (prev) refresh(G, prev); }
+function hide(G, it, cityId) { const prev = it.holder != null ? G.gens[it.holder] : null; it.holder = null; it.fac = null; it.city = cityId; if (prev) refresh(G, prev); }
+const learn = (g, sp) => { if (!g.spells.includes(sp)) { g.spells.push(sp); return true; } return false; };
 function serve(G, g, fid, cityId, loyalty) { g.status = 'serving'; g.fac = fid; g.city = cityId; g.loyalty = loyalty; g.task = null; }
 const sameKin = (G, a, b) => !!(a && b && a.kin && a.kin === b.kin);
 // the faction a talent would seek out: their historical lord's faction, or (kin:x) the faction a family serves
@@ -94,6 +139,7 @@ export function step(G) {
   if (G.over) return G;
   lifecycle(G);
   economy(G);
+  events(G);
   for (const fid of shuffle(G, Object.keys(G.factions))) { const f = G.factions[fid]; if (!f.alive) continue; domestic(G, f); }
   if (G.month % 3 === 0) for (const fid of shuffle(G, Object.keys(G.factions))) { const f = G.factions[fid]; if (f.alive) diplomacy(G, f); }
   for (const fid of shuffle(G, Object.keys(G.factions))) { const f = G.factions[fid]; if (f.alive) war(G, f); }
@@ -115,6 +161,11 @@ function lifecycle(G) {
     if (g.status === 'unborn' && (G.year > g.appear || (G.year === g.appear && G.month >= g.appearMonth)) && g.died >= G.year) comeOfAge(G, g);
     else if (g.status !== 'dead' && g.status !== 'unborn' && (G.year > g.died || (G.year === g.died && G.month >= g.deathMonth))) die(G, g, 'natural');
   }
+  // a general who reads a book of the arts may learn its spells
+  for (const it of G.items) if (it.teaches.length && it.holder != null) {
+    const g = G.gens[it.holder], sp = it.teaches.find((x) => !g.spells.includes(x));
+    if (sp && g.int >= 60 && r() < 0.03) { learn(g, sp); record(G, 'spell', 'bookSpell', { g: g.name, it: it.key, s: sp }, g.status === 'serving' ? g.fac : null, 2, { g: g.id }); }
+  }
   // the occasional wandering talent moves to another city
   for (const g of G.gens) {
     if (g.status !== 'free') continue;
@@ -127,12 +178,14 @@ function lifecycle(G) {
   }
 }
 function comeOfAge(G, g) {
+  if (g.hidden) { const it = G.items.find((x) => x.key === g.sword); if (it) give(G, it, g); for (const s of g.spells0) learn(g, s); }
   // family first: join the faction where kin serve (the lord's own family above all)
   const kinG = g.kin && G.gens.filter((k) => k !== g && k.kin === g.kin && k.status === 'serving').sort((a, b) => (G.factions[b.fac].lord === b.id) - (G.factions[a.fac].lord === a.id))[0];
   if (kinG) { serve(G, g, kinG.fac, kinG.city, G.factions[kinG.fac].lord === kinG.id ? 95 : 85); record(G, 'join', 'kinJoin', { g: g.name, f: G.factions[g.fac].name }, g.fac, g.lead + g.int + g.war > 220 ? 2 : 1, { g: g.id }); return; }
-  const f = preferred(G, g) || (g.fac0 && G.factions[g.fac0]);
+  const f = preferred(G, g) || (g.fac0 && (G.factions[g.fac0] || G.factions[G.carry[g.fac0]]));
   if (f && f.alive && G.r() < 0.7) { serve(G, g, f.id, f.capital, 75); record(G, 'join', 'serve', { g: g.name, f: f.name }, f.id, 1, { g: g.id }); return; }
   g.status = 'free'; g.city = g.home;
+  if (g.hidden) { g.known = true; record(G, 'appear', 'hiddenAppear', { g: g.name, c: G.cities[g.home].name }, null, 3, { g: g.id }); return; }
   if (g.lead + g.war + g.int + g.pol > 300) record(G, 'appear', 'appear', { g: g.name, c: G.cities[g.home].name }, null, 1, { g: g.id });
 }
 function die(G, g, cause, by) {
@@ -140,6 +193,12 @@ function die(G, g, cause, by) {
   g.status = 'dead'; g.diedAt = G.t; g.cause = cause;
   const level = wasLord ? 3 : g.lead + g.war + g.int + g.pol + g.cha > 330 ? 2 : 1;
   record(G, 'death', 'death', { g: g.name, f: f && was === 'serving' ? f.name : null, cause, by: by ? by.name : null, age: G.year - g.born }, was === 'serving' ? fid : null, level, { g: g.id });
+  for (const it of heldBy(G, g)) {
+    if (by && by.status === 'serving' && !holds(G, by, it.slot)) { give(G, it, by); record(G, 'item', 'itemTake', { g: by.name, x: g.name, it: it.key }, by.fac, 2, { g: by.id }); }
+    else if (by && by.status === 'serving') stash(G, it, by.fac);
+    else if (was === 'serving' && f && f.alive) stash(G, it, fid);
+    else hide(G, it, g.city);
+  }
   // a lord with no city left takes the faction down with him; otherwise someone succeeds
   if (wasLord) { if (citiesOf(G, fid).length) succession(G, fid, g); else destroy(G, fid, null, 'scatter', { f: f.name }); }
   for (const c of G.cities) if (c.gov === g.id) pickGovernor(G, c);
@@ -157,6 +216,7 @@ function succession(G, fid, old) {
 function destroy(G, fid, by, key, p) {
   const f = G.factions[fid]; if (!f.alive) return;
   f.alive = false; f.died = G.t;
+  for (const it of G.items) if (it.fac === fid) hide(G, it, f.capital);
   for (const c of citiesOf(G, fid)) { c.owner = null; c.gov = null; }
   for (const g of gensOf(G, fid)) { g.status = 'free'; g.fac = null; g.loyalty = 0; }
   record(G, 'fall', key, p, fid, 3);
@@ -214,6 +274,13 @@ function domestic(G, f) {
     if (!gs.length) { c.farm = Math.min(c.farmMax, c.farm + 1); c.comm = Math.min(c.commMax, c.comm + 1); }
   }
   logistics(G, f, dist);
+  // twice a year the lord rewards an officer with something from the treasury
+  if (G.month % 6 === 1) for (const it of G.items.filter((x) => x.fac === f.id)) {
+    const fit = (g) => (it.slot === 'b' ? g.int + g.lead : it.slot === 't' ? g.cha + g.pol : g.war + g.lead) + (100 - g.loyalty) * 0.5;
+    const g = maxBy(gensOf(G, f.id).filter((m) => !holds(G, m, it.slot)), fit); if (!g) continue;
+    give(G, it, g); g.loyalty = Math.min(100, g.loyalty + 10);
+    record(G, 'item', 'itemGive', { x: lord.name, g: g.name, it: it.key }, f.id, 1, { g: g.id });
+  }
 }
 function doJob(G, f, c, g, job, free) {
   const r = G.r;
@@ -228,8 +295,9 @@ function doJob(G, f, c, g, job, free) {
     case 'reward': { const low = gensIn(G, c).filter((m) => m.loyalty < 100).sort((a, b) => a.loyalty - b.loyalty)[0]; if (low) { low.loyalty = Math.min(99, low.loyalty + 6 + Math.round(r() * 6)); f.gold -= 40; } break; }
     case 'search': {
       f.gold -= 10;
-      const hidden = G.gens.filter((x) => x.status === 'free' && x.city === c.id && !x.known);
-      if (hidden.length && r() < 0.35 + g.cha / 300) { const x = pick(r, hidden); x.known = true; }
+      const hidden = G.gens.filter((x) => x.status === 'free' && x.city === c.id && !x.known), loot = G.items.filter((it) => it.city === c.id);
+      if (loot.length && r() < 0.12 + g.int / 1000) { const it = pick(r, loot); if (!holds(G, g, it.slot)) give(G, it, g); else stash(G, it, f.id); g.merit += 5; record(G, 'item', 'itemFind', { g: g.name, c: c.name, it: it.key }, f.id, 2, { g: g.id }); }
+      else if (hidden.length && r() < 0.35 + g.cha / 300) { const x = pick(r, hidden); x.known = true; }
       else if (r() < 0.2) f.gold += 50 + Math.round(r() * 100);
       break; }
     case 'recruitGen': {
@@ -303,6 +371,7 @@ function absorb(G, f, o, envoy) {
   for (const c of citiesOf(G, o.id)) c.owner = f.id;
   for (const g of gensOf(G, o.id)) { g.fac = f.id; g.loyalty = g.id === olord.id ? 55 : 60 + Math.round(G.r() * 20); }
   o.alive = false; o.died = G.t;
+  for (const it of G.items) if (it.fac === o.id) it.fac = f.id;
   record(G, 'fall', 'surrender', { g: olord.name, x: envoy.name, o: o.name, f: f.name }, f.id, 3);
   for (const c of citiesOf(G, f.id)) pickGovernor(G, c);
 }
@@ -354,6 +423,8 @@ function siege(G, f, srcs, city, army, troops, sent, train) {
   let a = troops, d = city.troops, aMor = 70 + Math.max(...army.map((g) => g.lead)) / 5, dMor = 60 + (city.morale + city.def / 20) / 3;
   const atkLead = maxBy(army, (g) => g.lead), aInt = maxBy(army, (g) => g.int), dInt = maxBy(defGens, (g) => g.int);
   const startA = a, startD = d, notes = [];
+  const caster = (gs) => maxBy(gs.filter((g) => g.spells.length && g.status === 'serving'), (g) => g.int), cA = caster(army), cD = caster(defGens);
+  let castA = 0, castD = 0;
   // a duel before the walls
   const champA = maxBy(army, (g) => g.war), champD = maxBy(defGens, (g) => g.war);
   if (champA && champD && champA.war >= 75 && champD.war >= 70 && r() < 0.3) {
@@ -371,13 +442,31 @@ function siege(G, f, srcs, city, army, troops, sent, train) {
     const pa = armyPower(liveA, a, train) * (aMor / 80), pd = armyPower(liveD, d, city.train) * (dMor / 80) * wallBonus(city);
     let dmgD = pa * (0.07 + r() * 0.05), dmgA = pd * (0.08 + r() * 0.05);
     // stratagems: the cleverer side may set fires, lay ambushes or sow confusion
-    if (aInt && r() < clamp((aInt.int - (dInt ? dInt.int : 40) + 20) / 220, 0.03, 0.4)) { dmgD *= 1.8; if (!notes.length) notes.push({ who: aInt.name, tac: pick(r, ['fire', 'ambush', 'flood', 'rumor']) }); }
-    if (dInt && r() < clamp((dInt.int - (aInt ? aInt.int : 40) + 20) / 260, 0.03, 0.35)) { dmgA *= 1.7; if (notes.length < 2) notes.push({ who: dInt.name, tac: pick(r, ['fire', 'night', 'rocks', 'raid']), def: 1 }); }
+    let stratA = false, stratD = false;
+    if (aInt && r() < clamp((aInt.int - (dInt ? dInt.int : 40) + 20) / 220, 0.03, 0.4)) { dmgD *= 1.8; stratA = true; if (!notes.length) notes.push({ who: aInt.name, tac: pick(r, ['fire', 'ambush', 'flood', 'rumor']) }); }
+    if (dInt && r() < clamp((dInt.int - (aInt ? aInt.int : 40) + 20) / 260, 0.03, 0.35)) { dmgA *= 1.7; stratD = true; if (notes.length < 2) notes.push({ who: dInt.name, tac: pick(r, ['fire', 'night', 'rocks', 'raid']), def: 1 }); }
+    // spells: a sorcerer on either side may call down lightning, raise a wind, bewitch the enemy …
+    for (const side of ['a', 'd']) {
+      const cst = side === 'a' ? cA : cD; if (!cst || cst.status !== 'serving' || (side === 'a' ? castA : castD) >= 2 || r() > 0.16 + cst.int / 900) continue;
+      const opts = cst.spells.filter((x) => x !== 'zhi' && (x !== 'zhen' || side === 'd')); if (!opts.length) continue;
+      const sp = pick(r, opts), atk = side === 'a';
+      if (atk) castA++; else castD++;
+      if (sp === 'lei') { if (atk) dmgD *= 2.2; else dmgA *= 2.2; const foes = (atk ? defGens : army).filter((x) => x.status === 'serving' && G.factions[x.fac] && G.factions[x.fac].lord !== x.id && x.war < 95); if (foes.length && r() < 0.06) die(G, pick(r, foes), 'lightning', cst); }
+      else if (sp === 'yao') { if (atk) dMor -= 18; else aMor -= 18; }
+      else if (sp === 'feng') { if (atk) dmgD *= (stratA ? 2.6 : 1.8); else dmgA *= (stratD ? 2.6 : 1.8); }
+      else if (sp === 'zhen') { dmgD *= 0.35; aMor -= 10; }
+      else if (sp === 'dun') { if (atk) dmgA *= 0.5; else dmgD *= 0.5; }
+      else if (sp === 'huan') { if (atk) { if (stratD) dmgA /= 1.7; dMor -= 10; } else { if (stratA) dmgD /= 1.8; aMor -= 10; } }
+      if (notes.length < 4) notes.push({ who: cst.name, tac: 'sp_' + sp, def: atk ? 0 : 1 });
+    }
     a = Math.max(0, Math.round(a - dmgA)); d = Math.max(0, Math.round(d - dmgD));
     aMor -= 2 + (dmgA / Math.max(1, a)) * 20; dMor -= 2 + (dmgD / Math.max(1, d)) * 25;
     if (a < startA * 0.3 || aMor < 25) break;
     if (dMor < 15) { d = 0; break; }
   }
+  // healers bring many of the wounded back to the ranks
+  if (cA && cA.status === 'serving' && cA.spells.includes('zhi') && a < startA) { a += Math.round((startA - a) * 0.25); if (notes.length < 4) notes.push({ who: cA.name, tac: 'sp_zhi' }); }
+  if (cD && cD.status === 'serving' && cD.spells.includes('zhi') && d > 0 && d < startD) { d += Math.round((startD - d) * 0.25); if (notes.length < 4) notes.push({ who: cD.name, tac: 'sp_zhi', def: 1 }); }
   city.def = Math.max(0, Math.round(city.def - (startA - a) / 60));
   for (const g of army) if (g.status === 'serving') g.merit += 3;
   const wp = { f: f.name, g: atkLead.name, c: city.name, o: defF ? defF.name : null, notes };
@@ -405,7 +494,7 @@ function captives(G, f, city, defGens, defFid) {
     if (g.status !== 'serving') continue;
     const escape = defFid && citiesOf(G, defFid).filter((c) => c.adj.includes(city.id) || true).sort((x, y) => (G.cities[x.id].adj.includes(city.id) ? -1 : 1))[0];
     const isLord = defFid && G.factions[defFid].lord === g.id;
-    if (escape && r() < 0.35 + (g.war + g.int) / 400 + (isLord ? 0.25 : 0)) { g.city = escape.id; continue; }
+    if (escape && r() < 0.35 + (g.war + g.int) / 400 + (isLord ? 0.25 : 0) + (holds(G, g, 'h') ? 0.2 : 0)) { g.city = escape.id; continue; }
     // try to win the captive over
     const p = isLord ? 0.04 : clamp(0.25 + (lord.cha - g.loyalty) / 160 + (defFid && sameKin(G, g, lordOf(G, defFid)) ? -0.4 : 0), 0.03, 0.9);
     if (r() < p) {
@@ -421,6 +510,69 @@ function captives(G, f, city, defGens, defFid) {
       g.city = escape.id; record(G, 'release', 'releaseHome', { x: lord.name, g: g.name, c: escape.name }, f.id, 2, { g: g.id });
     } else { g.status = 'free'; g.fac = null; g.city = pick(r, city.adj); g.loyalty = 0;
       if (isLord) { record(G, 'release', 'release', { x: lord.name, g: g.name }, f.id, 2, { g: g.id }); if (citiesOf(G, defFid).length) succession(G, defFid, g); } }
+  }
+}
+
+// ---------------------------------------------------------------- random events: disasters, windfalls, sages, immortals, treasures …
+const ownedCities = (G) => G.cities.filter((c) => c.owner);
+const living = (G) => Object.values(G.factions).filter((f) => f.alive && citiesOf(G, f.id).length);
+const EVENTS = [
+  ['locust', 6, (G, r) => { if (G.month < 4 || G.month > 9) return; const c = pick(r, ownedCities(G)), f = G.factions[c.owner]; c.farm = Math.round(c.farm * 0.75); f.food = Math.max(0, f.food - 800 - c.size * 600); return ['locust', { c: c.name, f: f.name }, c.owner, 1, { city: c.id }]; }],
+  ['plague', 4, (G, r) => {
+    const c = pick(r, ownedCities(G)), healer = G.gens.find((g) => (g.status === 'serving' || g.status === 'free') && g.city === c.id && g.spells.includes('zhi'));
+    if (healer) { c.morale = Math.min(100, c.morale + 5); healer.merit += 5; return ['plagueCured', { c: c.name, g: healer.name }, c.owner, 2, { g: healer.id }]; }
+    c.pop = Math.round(c.pop * 0.88); c.troops = Math.round(c.troops * 0.9);
+    const old = G.gens.filter((g) => g.status === 'serving' && g.city === c.id && G.year - g.born > 50 && G.factions[g.fac].lord !== g.id);
+    if (old.length && r() < 0.15) die(G, pick(r, old), 'plague');
+    return ['plague', { c: c.name }, c.owner, 1, { city: c.id }]; }],
+  ['flood', 4, (G, r) => { if (G.month < 5 || G.month > 9) return; const c = pick(r, ownedCities(G)); c.farm = Math.round(c.farm * 0.85); c.def = Math.round(c.def * 0.85); return ['flood', { c: c.name }, c.owner, 1, { city: c.id }]; }],
+  ['harvest', 4, (G, r) => { if (G.month < 7 || G.month > 9) return; const c = pick(r, ownedCities(G)), f = G.factions[c.owner]; f.food += 1500 + c.farm * 2; return ['harvest', { c: c.name, f: f.name }, c.owner, 1, { city: c.id }]; }],
+  ['quake', 2, (G, r) => { const c = pick(r, ownedCities(G)); c.def = Math.round(c.def * 0.7); c.pop = Math.round(c.pop * 0.95); return ['quake', { c: c.name }, c.owner, 2, { city: c.id }]; }],
+  ['bandits', 6, (G, r) => {
+    const c = pick(r, ownedCities(G)), gov = c.gov != null ? G.gens[c.gov] : null;
+    if (gov && gov.war + gov.lead > 140 && r() < 0.75) { gov.merit += 3; if (r() < 0.3 && gov.base.war < 100) { gov.base.war++; refresh(G, gov); } return ['banditsBeaten', { c: c.name, g: gov.name }, c.owner, 1, { g: gov.id }]; }
+    c.troops = Math.max(0, c.troops - 800 - Math.round(r() * 2000)); c.morale = Math.max(0, c.morale - 10); return ['bandits', { c: c.name }, c.owner, 1, { city: c.id }]; }],
+  ['caravan', 5, (G, r) => { const c = pick(r, ownedCities(G)), f = G.factions[c.owner], n = 200 + Math.round(r() * 500); f.gold += n; return ['caravan', { c: c.name, f: f.name, n }, c.owner, 1, { city: c.id }]; }],
+  ['omen', 2, (G, r) => { const f = pick(r, living(G)); for (const c of citiesOf(G, f.id)) c.morale = Math.min(100, c.morale + 8); return ['omen', { f: f.name }, f.id, 1]; }],
+  ['comet', 1, (G, r) => {
+    const lords = living(G).map((f) => G.gens[f.lord]).filter((g) => G.year - g.born >= 55); if (!lords.length) return;
+    const g = pick(r, lords); if (r() < 0.5) g.died = Math.min(g.died, G.year + 1);
+    return ['comet', { g: g.name }, g.fac, 2, { g: g.id }]; }],
+  ['sage', 4, (G, r) => { const gs = G.gens.filter((g) => g.status === 'serving' && g.base.int >= 50 && g.base.int < 100); if (!gs.length) return; const g = pick(r, gs), n = 1 + Math.floor(r() * 3); g.base.int = Math.min(100, g.base.int + n); refresh(G, g); return ['sage', { g: g.name, n }, g.fac, 1, { g: g.id }]; }],
+  ['training', 4, (G, r) => { const gs = G.gens.filter((g) => g.status === 'serving' && g.base.war >= 70 && g.base.war < 100); if (!gs.length) return; const g = pick(r, gs), n = 1 + Math.floor(r() * 2); g.base.war = Math.min(100, g.base.war + n); refresh(G, g); return ['training', { g: g.name, n }, g.fac, 1, { g: g.id }]; }],
+  ['treasure', 3, (G, r) => {
+    const loot = G.items.filter((it) => it.city != null); if (!loot.length) return;
+    const it = pick(r, loot), c = G.cities[it.city], gs = G.gens.filter((g) => (g.status === 'serving' || g.status === 'free') && g.city === c.id); if (!gs.length) return;
+    const g = pick(r, gs);
+    if (!holds(G, g, it.slot)) give(G, it, g); else if (g.status === 'serving') stash(G, it, g.fac); else return;
+    return ['itemFind', { g: g.name, c: c.name, it: it.key }, g.status === 'serving' ? g.fac : null, 2, { g: g.id }]; }],
+  ['immortal', 2, (G, r) => {
+    const all = ['lei', 'yao', 'feng', 'zhen', 'dun', 'huan', 'zhi'], gs = G.gens.filter((g) => (g.status === 'serving' || g.status === 'free') && g.base.int >= 75 && g.spells.length < 3);
+    if (!gs.length) return; const g = pick(r, gs), sp = pick(r, all.filter((x) => !g.spells.includes(x))); learn(g, sp);
+    return ['immortal', { g: g.name, s: sp }, g.status === 'serving' ? g.fac : null, 2, { g: g.id }]; }],
+  ['refugees', 4, (G, r) => { const c = pick(r, ownedCities(G)); c.pop = Math.min(c.popMax, Math.round(c.pop * 1.08)); c.morale = Math.max(0, c.morale - 3); return ['refugees', { c: c.name }, c.owner, 1, { city: c.id }]; }],
+  ['tournament', 2, (G, r) => {
+    if (G.month > 3) return; const fs = living(G).filter((f) => gensOf(G, f.id).length >= 4); if (!fs.length) return;
+    const f = pick(r, fs), gs = gensOf(G, f.id), g = maxBy(gs, (x) => x.war + r() * 20);
+    for (const m of gs) m.loyalty = Math.min(100, m.loyalty + 3); g.merit += 5;
+    return ['tournament', { f: f.name, g: g.name }, f.id, 1, { g: g.id }]; }],
+  ['oath', 2, (G, r) => {
+    const gs = G.gens.filter((g) => g.status === 'serving' && g.cha >= 70 && !g.sworn); if (gs.length < 2) return;
+    const a = pick(r, gs), b = gs.find((x) => x !== a && x.fac === a.fac && x.city === a.city); if (!b) return;
+    a.sworn = b.sworn = true; a.loyalty = Math.max(a.loyalty, 95); b.loyalty = Math.max(b.loyalty, 95);
+    return ['oath', { a: a.name, b: b.name }, a.fac, 1, { g: a.id }]; }],
+  ['edict', 2, (G, r) => { const fs = living(G).filter((f) => citiesOf(G, f.id).length >= 3); if (!fs.length) return; const f = pick(r, fs); for (const o of Object.keys(f.rel)) f.rel[o] = Math.min(100, f.rel[o] + 10); for (const c of citiesOf(G, f.id)) c.morale = Math.min(100, c.morale + 4); return ['edict', { f: f.name }, f.id, 1]; }],
+  ['assassin', 1, (G, r) => { const f = pick(r, living(G)), g = G.gens[f.lord]; return [g.war + g.int > 120 || r() < 0.6 ? 'assassinFail' : 'assassinWound', { g: g.name }, f.id, 2, { g: g.id }]; }],
+  ['granary', 2, (G, r) => { const c = pick(r, ownedCities(G)), f = G.factions[c.owner]; f.food = Math.round(f.food * 0.8); return ['granary', { c: c.name, f: f.name }, c.owner, 1, { city: c.id }]; }],
+];
+const EV_TOTAL = EVENTS.reduce((s, e) => s + e[1], 0);
+function events(G) {
+  const r = G.r, n = (r() < 0.6 ? 1 : 0) + (r() < 0.25 ? 1 : 0);      // a little under one event a month across the realm
+  for (let i = 0; i < n; i++) {
+    let x = r() * EV_TOTAL, ev = EVENTS[0]; for (const e of EVENTS) { x -= e[1]; if (x < 0) { ev = e; break; } }
+    if (!ownedCities(G).length) return;
+    const out = ev[2](G, r); if (!out) continue;
+    const [key, p, fac, level, extra] = out; record(G, 'event', key, p, fac || null, level, extra || {});
   }
 }
 
