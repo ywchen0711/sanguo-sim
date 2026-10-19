@@ -75,6 +75,7 @@ export function fmt(e, lang = 'zh') {
     case 'captive': return en ? `${N('g')} is captured and joins the ${N('f')} army.` : `${p.g}被俘，歸順${p.f}軍。`;
     case 'releaseHome': return en ? `${N('x')} releases the captured ${N('g')}, who returns to ${C('c')}.` : `${p.x}釋放了被俘的${p.g}，${p.g}返回${p.c}。`;
     case 'release': return en ? `${N('x')} releases the captured ${N('g')}.` : `${p.x}釋放了被俘的${p.g}。`;
+    case 'refuse': return en ? `The captured ${N('g')} refuses to serve ${N('x')} and is let go.` : `被俘的${p.g}不肯歸順${p.x}，被放走了。`;
     case 'rebel': return en ? `${N('g')} seizes ${C('c')} and rebels against the ${N('f')} army!` : `${p.g}據${p.c}自立，反叛${p.f}軍！`;
     case 'rise': return en ? `The ${N('f')} army seizes ${C('c')} and rises again.` : `${p.f}軍輾轉奪取${p.c}，東山再起。`;
     // the four hidden generals
@@ -108,4 +109,54 @@ export function fmt(e, lang = 'zh') {
     case 'granary': return en ? `Fire sweeps the granaries of ${C('c')}; the ${N('f')} army loses much of its food.` : `${p.c}糧倉失火，${p.f}軍損失大量糧草。`;
     default: return e.key;
   }
+}
+
+// ---------------------------------------------------------------- the player's court: what a general proposes, and how it turned out
+export const JOB = { farm: ['開墾', 'Farming'], comm: ['振興商業', 'Trade'], def: ['修築城牆', 'Walls'], morale: ['巡察安民', 'Patrol'], train: ['操練士兵', 'Training'],
+  draft: ['徵兵', 'Drafting'], reward: ['褒賞將士', 'Rewards'], search: ['搜索人才', 'Searching'], recruitGen: ['登用人才', 'Recruiting'] };
+const FIELD = { farm: ['農業', 'farming'], comm: ['商業', 'commerce'], def: ['城防', 'walls'], morale: ['民心', 'morale'], train: ['訓練', 'training'], troops: ['兵力', 'troops'], gold: ['金', 'gold'] };
+// [title, what the general says]
+export function proposalText(prop, lang = 'zh') {
+  const p = prop.p, en = lang === 'en', N = (k) => (en ? romanize(p[k]) : p[k]), C = (k) => (en ? romanize(p[k], true) : p[k]);
+  const I = () => (en ? itemName(p.it, 'en') : `「${itemName(p.it, 'zh')}」`);
+  switch (prop.type) {
+    case 'job': {
+      const say = {
+        farm: [`「${p.c}的田地還有許多荒蕪，臣願前往開墾，以充軍糧。」`, `"Much of ${C('c')}'s land lies fallow. Let me clear it and fill our granaries."`],
+        comm: [`「開市集、減商稅，${p.c}的府庫自然充實。」`, `"Open the markets and ease the merchants' taxes, and ${C('c')}'s treasury will fill."`],
+        def: [`「${p.c}的城牆年久失修，萬一敵軍來犯，恐怕難守。」`, `"The walls of ${C('c')} are crumbling. If the enemy comes, we could not hold."`],
+        morale: [`「${p.c}的百姓人心不安，臣願巡視四方，安撫民心。」`, `"The people of ${C('c')} are uneasy. Let me ride out and calm them."`],
+        train: ['「新兵尚未熟悉陣法，臣願親自操練。」', '"The new recruits don\'t know their formations yet. Let me drill them myself."'],
+        draft: [`「${p.c}兵力不足，難以成事，臣請募兵。」`, `"${C('c')} is short of soldiers. Let me raise more men."`],
+        reward: ['「近來有將士心生不滿，請主公撥金賞賜，以安其心。」', '"Some officers have been grumbling. A gift of gold would set their hearts at ease."'],
+        search: [`「${p.c}城中或有隱士與寶物，臣願四處訪查。」`, `"There may be hidden talent or treasure in ${C('c')}. Let me go and look."`],
+        recruitGen: [`「${p.x || '城中的在野之士'}是難得的人才，臣願登門拜訪，請其出仕。」`, `"${p.x ? N('x') : 'A talent in this city'} would be a rare find. Let me call on them and invite them to serve."`],
+      }[prop.job];
+      return [en ? `${JOB[prop.job][1]} in ${C('c')}` : `${p.c}・${JOB[prop.job][0]}`, say[en ? 1 : 0]];
+    }
+    case 'war': return [en ? `Attack ${C('t')}` : `出征${p.t}`,
+      en ? `"${C('t')} is open to attack. Give me ${p.troops} men${p.from.length > 1 ? ` from ${p.from.map((c) => romanize(c, true)).join(', ')}` : ''} and it is ours!"`
+        : `「${p.t}${p.o ? `的${p.o}軍` : '的守軍'}防備有隙，臣願率兵${p.troops}${p.from.length > 1 ? `，從${p.from.join('、')}分路進擊` : ''}，必取此城！」`];
+    case 'absorb': return [en ? `Demand that ${N('x')} surrender` : `勸降${p.x}`, en ? `"${N('x')} is weak and alone. Let me go as envoy and persuade them to bring the ${N('o')} army over to us."` : `「${p.x}勢單力薄，臣願出使，勸其率${p.o}軍歸順。」`];
+    case 'betray': return [en ? `Break the alliance with the ${N('o')} army` : `撕毀與${p.o}的盟約`, en ? `"The ${N('o')} army has grown weak. The alliance only holds us back; let us end it and take what we can."` : `「${p.o}已衰，盟約只會束縛我軍，不如撕毀盟約，趁勢取之。」`];
+    case 'ally': return [en ? `Ally with the ${N('o')} army` : `與${p.o}結盟`, en ? `"The ${N('t')} army grows too strong. Let us ally with the ${N('o')} army and stand against it together."` : `「${p.t}勢大，不如與${p.o}結盟，共抗強敵。」`];
+    case 'truce': return [en ? `Sue the ${N('o')} army for peace` : `向${p.o}求和`, en ? `"The ${N('o')} army is at its height. Let us ask for a year's truce while we gather our strength."` : `「${p.o}兵鋒正盛，請暫且求和，停戰一年，養精蓄銳。」`];
+    case 'lure': return [en ? `Lure ${N('x')} away` : `勸誘${p.x}來投`, en ? `"${N('x')} is unhappy in the ${N('o')} army. Let me go and win them over to our side."` : `「${p.x}在${p.o}軍中不得志，臣願前往遊說，請其來投。」`];
+    case 'item': return [en ? `Give ${I()} to ${N('x')}` : `賞賜${I()}給${p.x}`, en ? `"${N('x')} has served with distinction. Grant them ${I()} as a mark of your favour."` : `「${p.x}功勞卓著，請將${I()}賜之，以示恩寵。」`];
+    case 'captive': return [en ? `The captive ${N('x')}` : `處置俘虜${p.x}`, en ? `"We have captured ${N('x')}${p.o ? ` of the ${N('o')} army` : ''}. Shall we try to win them over, let them go, or put them to death?"` : `「我軍俘虜了${p.o ? p.o + '軍的' : ''}${p.x}。主公要勸降、釋放，還是處斬？」`];
+    default: return [prop.type, ''];
+  }
+}
+// how a decision turned out (a chronicle entry, the work done, or a refusal)
+export function decisionText(res, lang = 'zh') {
+  const en = lang === 'en', g = res.prop.p.g, G_ = en ? romanize(g) : g;
+  if (res.void) return en ? 'Things have changed; the proposal no longer applies.' : '情勢已變，這份奏報作廢了。';
+  if (res.broke) return en ? 'The treasury is too low to pay for it.' : '府庫金錢不足，無法執行。';
+  if (res.rejected && res.prop.type !== 'captive') return en ? `${G_} bows and withdraws.` : `${g}：「……遵命。」默默退下。`;
+  if (res.logs && res.logs.length) return res.logs.map((e) => fmt(e, lang)).join(' ');
+  if (res.key === 'jobDone') {
+    const d = res.p.d.filter(([k]) => FIELD[k]).map(([k, v]) => `${FIELD[k][en ? 1 : 0]} ${v > 0 ? '+' : '−'}${Math.abs(v)}`);
+    return en ? `${G_} sees to the ${JOB[res.p.job][1].toLowerCase()}${d.length ? ': ' + d.join(', ') : ', but nothing comes of it'}.` : `${g}完成了${JOB[res.p.job][0]}${d.length ? '：' + d.join('、') : '，但沒有收穫'}。`;
+  }
+  return en ? 'Done.' : '已執行。';
 }

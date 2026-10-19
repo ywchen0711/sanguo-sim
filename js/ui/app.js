@@ -1,8 +1,8 @@
 // The page: runs the simulation month by month and shows the map, the chronicle, the warlords, the generals and the cities.
-import { newGame, step, citiesOf, gensOf, power, capacity, heldBy } from '../sim/engine.js?v=2';
-import { fmt, dateStr, nameIn, romanize, itemName, spellName } from '../sim/text.js?v=2';
+import { newGame, step, citiesOf, gensOf, power, capacity, heldBy, decide, autoDecide, autoAnswer } from '../sim/engine.js?v=3';
+import { fmt, dateStr, nameIn, romanize, itemName, spellName, proposalText, decisionText, JOB } from '../sim/text.js?v=3';
 import { SCENARIOS, SCEN } from '../data/scenarios.js';
-import { makeView, drawMap, cityAt, drawChart, resetMap } from './map.js?v=2';
+import { makeView, drawMap, cityAt, drawChart, resetMap } from './map.js?v=3';
 
 // ---------------------------------------------------------------- language
 const q = new URLSearchParams(location.search);
@@ -30,6 +30,14 @@ const T = {
   wars: ['場戰役', 'battles'], duelsN: ['次一騎討', 'duels'], fallenN: ['個勢力滅亡', 'warlords fell'], months: ['月', ''], ofAge: ['登場', 'comes of age'],
   scenario: ['劇本', 'Scenario'], events: ['事件', 'Events'], treasures: ['寶物', 'Items'], spells: ['法術', 'Spells'], gear: ['寶物', 'Treasures'],
   treasury: ['府庫中的寶物', 'In the treasury'], unknown: ['下落不明', 'Whereabouts unknown'], holder: ['持有', 'Held by'], hiddenGen: ['隱藏武將', 'Hidden general'],
+  court: ['奏報', 'Court'], playAs: ['君主（你要扮演誰？）', 'Play as (which warlord do you rule?)'], watchOnly: ['不扮演，只看歷史自己展開', 'Nobody: just watch history unfold'],
+  approve: ['✔ 准奏', '✔ Approve'], reject: ['✖ 駁回', '✖ Reject'], persuade: ['✔ 勸降', '✔ Win over'], releaseB: ['釋放', 'Release'], execute: ['處斬', 'Execute'],
+  autoMode: ['自動回覆奏報', 'Answer proposals'], manual: ['手動：每份都問我', 'Manually: ask me'], smart: ['智能判斷', 'Smart: judge for me'], approveAll: ['全部准奏', 'Approve everything'],
+  askWar: ['出征仍由我決定', 'Always ask me about attacks'], waiting: ['份奏報待處理', 'proposals waiting'], lastOne: ['這是本月最後一份奏報', 'The last proposal this month'],
+  noPending: ['目前沒有待處理的奏報。按 ▶ 開始 或 下個月，武將們就會再來上奏。', 'No proposals waiting. Press ▶ Play or Next month and your officers will come with more.'],
+  decided: ['最近的決定', 'Recent decisions'], you: ['你', 'You'], realmFell: ['你的勢力滅亡了', 'Your realm has fallen'], realmWon: ['你統一了天下！', 'You have united the realm!'],
+  fellText: ['可以繼續觀看天下大勢，或開始新的天下。', 'You can keep watching how the realm unfolds, or start a new game.'], odds: ['勝算', 'Odds'], persuadeOdds: ['勸降成功率', 'Chance to win over'],
+  withArmy: ['隨行', 'With'], loyaltyS: ['忠誠', 'loyalty'], from: ['出兵', 'From'], courtHint: ['武將上奏時遊戲會暫停，等你決定。', 'The game pauses while a proposal waits for you.'],
   slots: { w: ['武器', 'Weapon'], h: ['坐騎', 'Horse'], b: ['書籍', 'Book'], t: ['寶物', 'Treasure'] },
   tasks: { farm: ['開墾', 'Farming'], comm: ['商業', 'Commerce'], def: ['城防', 'Walls'], morale: ['巡察', 'Patrol'], train: ['訓練', 'Training'], draft: ['徵兵', 'Drafting'], reward: ['褒賞', 'Rewards'], search: ['搜索', 'Searching'], recruitGen: ['登用', 'Recruiting'] },
 };
@@ -40,12 +48,12 @@ const big = (n) => (lang === 'en' ? (n >= 10000 ? (n / 1000).toFixed(0) + 'k' : 
 const $ = (s) => document.querySelector(s);
 
 // ---------------------------------------------------------------- state
-let G = null, speed = 0, acc = 0, dirty = true, ui = { tab: 'chron', sel: null, gen: null, fac: null, filter: 'major', recentWars: [], gq: '', gstatus: 'serving', gfac: '', gsort: 'total' };
+let G = null, speed = 0, acc = 0, dirty = true, autoSet = { mode: 'manual', askWar: true }, ui = { tab: 'chron', resume: false, flash: [], sel: null, gen: null, fac: null, filter: 'major', recentWars: [], gq: '', gstatus: 'serving', gfac: '', gsort: 'total' };
 const SPEEDS = [1, 3, 8, 24, 60];       // months per second
 let speedIx = 1;
-function start(seed, lifespan, scenario) {
-  G = newGame({ seed, lifespan, scenario }); resetMap(); ui = { ...ui, sel: null, gen: null, fac: null, recentWars: [] }; speed = 0; dirty = true;
-  const u = new URLSearchParams(location.search); u.set('seed', G.seed); u.set('sc', G.scenario); history.replaceState(null, '', '?' + u);   // shareable: the same seed and scenario replay the same history
+function start(seed, lifespan, scenario, player) {
+  G = newGame({ seed, lifespan, scenario, player }); G.auto = { ...autoSet }; resetMap(); ui = { ...ui, sel: null, gen: null, fac: null, recentWars: [], flash: [], resume: false, tab: G.player ? 'court' : ui.tab === 'court' ? 'chron' : ui.tab, fellShown: false }; speed = 0; dirty = true;
+  const u = new URLSearchParams(location.search); u.set('seed', G.seed); u.set('sc', G.scenario); if (G.player) u.set('pl', G.player); else u.delete('pl'); history.replaceState(null, '', '?' + u);   // shareable: the same seed and scenario replay the same history
   render();
 }
 
@@ -55,7 +63,7 @@ function frame(now) {
   const dt = Math.min(0.25, (now - last) / 1000); last = now;
   if (G && speed && !G.over) {
     acc += dt * SPEEDS[speedIx];
-    let n = 0; while (acc >= 1 && n < 10) { advance(); acc--; n++; }
+    let n = 0; while (acc >= 1 && n < 10 && speed) { advance(); acc--; n++; }
     if (G.over) { speed = 0; showEnd(); }
   }
   drawAll();
@@ -65,9 +73,26 @@ function frame(now) {
 function advance() {
   const before = G.log.length;
   step(G);
+  courtTurn(before);
+  dirty = true;
+}
+// after each month: answer what the automatic setting allows; if a proposal still waits for the lord, stop and show it
+function courtTurn(before) {
+  if (G.player) { const done = autoDecide(G); if (done.length) ui.flash = ui.flash.concat(done).slice(-6); }
   for (const e of G.log.slice(before)) if (e.kind === 'war') ui.recentWars.push(e);
   ui.recentWars = ui.recentWars.filter((e) => G.t - e.t <= 4);
-  dirty = true;
+  if (G.player && G.pending.length) { if (speed) ui.resume = true; speed = 0; acc = 0; ui.tab = 'court'; ui.gen = null; ui.fac = null; renderControls(); renderTabs(); }
+  if (G.player && !G.factions[G.player].alive && !ui.fellShown) { ui.fellShown = true; speed = 0; showFell(); }
+}
+// the lord answers the first proposal
+function answer(yes, choice) {
+  const before = G.log.length, r = decide(G, yes, choice); if (!r) return;
+  ui.flash = ui.flash.concat([r]).slice(-6);
+  ui.flash = ui.flash.concat(autoDecide(G)).slice(-6);
+  for (const e of G.log.slice(before)) if (e.kind === 'war') ui.recentWars.push(e);
+  if (G.over && !G.pending.length) { showEnd(); return; }
+  if (!G.pending.length && ui.resume) { ui.resume = false; speed = 1; }
+  renderControls(); renderHeader(); renderPane();
 }
 
 // ---------------------------------------------------------------- drawing
@@ -76,6 +101,8 @@ let view = null;
 function drawAll() {
   if (!G) return;
   const cv = $('#map'), c = fit(cv); view = makeView(cv);
+  const pw = G.player && G.pending[0] && G.pending[0].type === 'war' ? G.pending[0] : null;
+  ui.plan = pw ? { to: pw.target, from: pw.from, fac: G.player } : null;
   drawMap(c, G, view, ui, lang);
   const ch = $('#chart'), cc = fit(ch); drawChart(cc, G, ch.clientWidth, ch.clientHeight, lang);
 }
@@ -84,7 +111,8 @@ function drawAll() {
 function renderHeader() {
   $('#title').textContent = t('title'); $('#subtitle').textContent = `${t('subtitle')} · ${SCEN[G.scenario].name[lang === 'en' ? 1 : 0]}`;
   const alive = Object.values(G.factions).filter((f) => f.alive).length;
-  $('#date').innerHTML = `${dateStr(G.year, G.month, lang)}<small>${lang === 'en' ? `${alive} warlords · seed ${G.seed}` : `群雄 ${alive} · 種子 ${G.seed}`}</small>`;
+  const me = G.player && G.factions[G.player], meTxt = me ? `<b style="color:${me.color}">${t('you')}: ${esc(N(me.name))}</b> · ` : '';
+  $('#date').innerHTML = `${dateStr(G.year, G.month, lang)}<small>${meTxt}${lang === 'en' ? `${alive} warlords · seed ${G.seed}` : `群雄 ${alive} · 種子 ${G.seed}`}</small>`;
   const legend = Object.values(G.factions).filter((f) => f.alive).map((f) => [f, citiesOf(G, f.id).length]).sort((a, b) => b[1] - a[1]).slice(0, 8);
   $('#legend').innerHTML = legend.map(([f, n]) => `<div><i style="background:${f.color}"></i>${esc(N(f.name))} ${n}</div>`).join('');
 }
@@ -103,12 +131,13 @@ function renderControls() {
 function render() { renderControls(); renderTabs(); renderHeader(); renderPane(); }
 function renderTabs() {
   const tabs = $('#tabs'); tabs.innerHTML = '';
-  for (const k of ['chron', 'facs', 'gens', 'cities', 'treasures']) { const b = document.createElement('button'); b.textContent = t(k); b.className = ui.tab === k ? 'on' : ''; b.onclick = () => { ui.tab = k; ui.gen = null; ui.fac = null; if (k !== 'cities') ui.sel = ui.sel; renderTabs(); renderPane(); }; tabs.appendChild(b); }
+  for (const k of [...(G.player ? ['court'] : []), 'chron', 'facs', 'gens', 'cities', 'treasures']) { const b = document.createElement('button'); b.textContent = t(k) + (k === 'court' && G.pending.length ? ` (${G.pending.length})` : ''); b.className = ui.tab === k ? 'on' : ''; b.onclick = () => { ui.tab = k; ui.gen = null; ui.fac = null; if (k !== 'cities') ui.sel = ui.sel; renderTabs(); renderPane(); }; tabs.appendChild(b); }
 }
 function renderPane() {
   const p = $('#pane'), keep = p.scrollTop;
   if (ui.gen != null) p.innerHTML = genCard(G.gens[ui.gen]);
   else if (ui.fac) p.innerHTML = facCard(G.factions[ui.fac]);
+  else if (ui.tab === 'court' && G.player) { p.innerHTML = court(); bindCourt(); }
   else if (ui.tab === 'chron') p.innerHTML = chronicle();
   else if (ui.tab === 'facs') p.innerHTML = factions();
   else if (ui.tab === 'gens') { p.innerHTML = generals(); bindGenFilters(); }
@@ -127,6 +156,44 @@ const swatch = (fid) => `<span class="sw" style="background:${fid && G.factions[
 const facLink = (fid) => (fid && G.factions[fid] ? `<span class="tag" data-f="${fid}">${swatch(fid)}${esc(N(G.factions[fid].name))}</span>` : `<span class="tag">${t('neutral')}</span>`);
 const genLink = (g) => `<span class="tag" data-g="${g.id}">${esc(N(g.name))}</span>`;
 const cityLink = (c) => `<span class="tag" data-c="${c.id}">${esc(CN(c.name))}</span>`;
+
+// the lord's court: the proposal waiting for an answer, the automatic setting, and how recent decisions turned out
+const ICON = { war: '⚔', absorb: '🏳', betray: '🗡', ally: '🕊', truce: '📜', lure: '💬', item: '💎', captive: '⛓',
+  farm: '🌾', comm: '💰', def: '🧱', morale: '🏮', train: '🏹', draft: '🪖', reward: '🎁', search: '🔍', recruitGen: '🤝' };
+const icon = (prop) => ICON[prop.type === 'job' ? prop.job : prop.type] || '📜';
+function court() {
+  const f = G.factions[G.player], cs = citiesOf(G, f.id), gs = gensOf(G, f.id), lord = G.gens[f.lord];
+  const opt = (v, k) => `<option value="${v}" ${G.auto.mode === v ? 'selected' : ''}>${t(k)}</option>`;
+  let h = `<div class="realm"><span class="sw" style="background:${f.color}"></span><b>${esc(N(f.name))}</b> · ${t('lord')} ${genLink(lord)}
+    <span class="dim">${t('nCities')} ${cs.length} · ${t('nGens')} ${gs.length} · ${t('troops')} ${big(cs.reduce((s, c) => s + c.troops, 0))} · ${t('gold')} ${big(Math.max(0, f.gold))} · ${t('food')} ${big(f.food)}</span></div>
+    <div class="autoset"><label>${t('autoMode')} <select id="amode">${opt('manual', 'manual')}${opt('smart', 'smart')}${opt('all', 'approveAll')}</select></label>
+    <label><input type="checkbox" id="awar" ${G.auto.askWar ? 'checked' : ''}> ${t('askWar')}</label></div>`;
+  const prop = G.pending[0];
+  if (prop) {
+    const g = G.gens[prop.g], [title, say] = proposalText(prop, lang), c = prop.city != null ? G.cities[prop.city] : null, P = prop.p;
+    const meta = [];
+    if (prop.type === 'war') { meta.push(`${t('troops')} ${big(P.troops)}`); meta.push(`${t('from')} ${P.from.map((x) => esc(CN(x))).join(lang === 'en' ? ', ' : '、')}`); meta.push(`${t('withArmy')} ${P.army.map((x) => esc(N(x))).join(lang === 'en' ? ', ' : '、')}`); meta.push(`<b class="${P.chance >= 60 ? 'hi' : P.chance >= 35 ? 'mid' : 'lo'}">${t('odds')} ${P.chance}%</b>`); }
+    if (prop.type === 'captive') meta.push(`<b class="${P.chance >= 50 ? 'hi' : P.chance >= 25 ? 'mid' : 'lo'}">${t('persuadeOdds')} ${P.chance}%</b>`);
+    if (prop.type === 'job' && c && ['farm', 'comm', 'def', 'morale', 'train'].includes(prop.job)) { const max = { farm: c.farmMax, comm: c.commMax, def: c.defMax, morale: 100, train: 100 }[prop.job]; meta.push(`${t(prop.job === 'def' ? 'def' : prop.job)} ${c[prop.job]} / ${max}`); }
+    if (prop.type === 'job' && c && prop.job === 'draft') meta.push(`${t('troops')} ${big(c.troops)} / ${big(capacity(c))}`);
+    const btns = prop.type === 'captive' ? `<button class="btn go big" id="cyes">${t('persuade')}</button><button class="btn big" id="cno">${t('releaseB')}</button><button class="btn big danger" id="cexe">${t('execute')}</button>`
+      : `<button class="btn go big" id="cyes">${t('approve')}</button><button class="btn big" id="cno">${t('reject')}</button>`;
+    h += `<div class="prop"><div class="who"><span class="seal" style="background:${f.color}">${esc(g.name[0])}</span><div>${genLink(g)} ${c ? `<span class="dim">@${esc(CN(c.name))}</span>` : ''}<br>
+      <small class="dim">${t('lead')} ${g.lead} ${t('warS')} ${g.war} ${t('int')} ${g.int} ${t('pol')} ${g.pol} ${t('cha')} ${g.cha} · ${t('loyaltyS')} ${g.loyalty}</small></div></div>
+      <h3>${icon(prop)} ${esc(title)}</h3><p class="say">${esc(say)}</p>${meta.length ? `<p class="meta">${meta.join(' · ')}</p>` : ''}
+      <div class="btns">${btns}</div><small class="dim">${G.pending.length > 1 ? `${G.pending.length - 1} ${t('waiting')}` : t('lastOne')}</small></div>`;
+  } else h += `<div class="prop idle"><p>${t('noPending')}</p><div class="btns"><button class="btn go big" id="cplay">${t('play')}</button><button class="btn big" id="cnext">${t('month')}</button></div><small class="dim">${t('courtHint')}</small></div>`;
+  const recent = G.decided.slice().reverse();
+  if (recent.length) h += `<h3>${t('decided')}</h3>` + recent.map((r) => { const [title] = proposalText(r.prop, lang); return `<div class="ev dec ${r.ok ? 'ok' : r.rejected ? 'no' : ''}" style="border-left-color:${f.color}"><span class="d">${dateStr(r.year, r.month, lang)}</span><span>${icon(r.prop)} <b>${esc(title)}</b>　${esc(decisionText(r, lang))}</span></div>`; }).join('');
+  return h;
+}
+function bindCourt() {
+  const on = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = fn; };
+  on('cyes', () => answer(true)); on('cno', () => answer(false)); on('cexe', () => answer(false, 'execute'));
+  on('cplay', () => { speed = 1; renderControls(); }); on('cnext', () => { speed = 0; advance(); renderControls(); renderPane(); });
+  const m = $('#amode'); if (m) m.onchange = () => { G.auto.mode = autoSet.mode = m.value; ui.flash = ui.flash.concat(autoDecide(G)); if (!G.pending.length && ui.resume) { ui.resume = false; speed = 1; } renderControls(); renderTabs(); renderPane(); };
+  const w = $('#awar'); if (w) w.onchange = () => { G.auto.askWar = autoSet.askWar = w.checked; ui.flash = ui.flash.concat(autoDecide(G)); if (!G.pending.length && ui.resume) { ui.resume = false; speed = 1; } renderControls(); renderTabs(); renderPane(); };
+}
 
 // the chronicle, newest first
 function chronicle() {
@@ -232,18 +299,30 @@ function showNew(first) {
   const m = modal(`<h2>${t('title')}</h2>
     <label>${t('scenario')}</label><select id="nscen">${SCENARIOS.map((S) => `<option value="${S.id}" ${S.id === cur ? 'selected' : ''}>${S.id === 'heroes' ? '' : S.year + ' '}${S.name[lang === 'en' ? 1 : 0]}</option>`).join('')}</select>
     <p id="ndesc"></p>
+    <label>${t('playAs')}</label><select id="nplayer"></select>
     <label>${t('seed')}</label><input id="nseed" type="number" value="${first && q.get('seed') ? +q.get('seed') : Math.floor(Math.random() * 99999)}">
     <label>${t('lifespan')}</label><select id="nlife"><option value="history">${t('hist')}</option><option value="long">${t('long')}</option></select>
     <div class="row2"><button class="btn go big" id="ngo">${t('start')}</button></div>`);
-  const sel = m.querySelector('#nscen'), desc = () => { m.querySelector('#ndesc').textContent = SCEN[sel.value].desc[lang === 'en' ? 1 : 0]; };
+  const want = (G && G.player) || q.get('pl') || 'cao';
+  const sel = m.querySelector('#nscen'), desc = () => {
+    m.querySelector('#ndesc').textContent = SCEN[sel.value].desc[lang === 'en' ? 1 : 0];
+    const fs = SCEN[sel.value].factions, pickId = fs.some((x) => x[0] === want) ? want : fs[0][0];
+    m.querySelector('#nplayer').innerHTML = fs.map(([id, name, lord, color, cities]) => `<option value="${id}" ${id === pickId ? 'selected' : ''}>${esc(N(lord))}${name !== lord ? ` (${esc(N(name))})` : ''} · ${cities.length} ${t('nCities')}</option>`).join('') + `<option value="">${t('watchOnly')}</option>`;
+  };
   sel.onchange = desc; desc();
-  m.querySelector('#ngo').onclick = () => { m.hidden = true; start(+m.querySelector('#nseed').value || 1, m.querySelector('#nlife').value, sel.value); speed = 1; renderControls(); };
+  m.querySelector('#ngo').onclick = () => { m.hidden = true; start(+m.querySelector('#nseed').value || 1, m.querySelector('#nlife').value, sel.value, m.querySelector('#nplayer').value || null); speed = G.player ? 0 : 1; renderControls(); };
+}
+function showFell() {
+  renderControls();
+  const m = modal(`<h2>${t('realmFell')}</h2><p>${t('fellText')}</p><div class="row2"><button class="btn" id="fkeep">${t('keepWatching')}</button><button class="btn go" id="fnew">${t('newGame')}</button></div>`);
+  m.querySelector('#fkeep').onclick = () => { m.hidden = true; G.player = null; ui.tab = 'chron'; render(); };
+  m.querySelector('#fnew').onclick = () => { m.hidden = true; showNew(); };
 }
 function showEnd() {
   renderControls();
-  const won = G.over !== 'time', f = won && G.factions[G.over], lord = f && G.gens[f.lord];
+  const won = G.over !== 'time', f = won && G.factions[G.over], lord = f && G.gens[f.lord], mineWon = won && G.over === G.player;
   const wars = G.log.filter((e) => e.kind === 'war').length, duels = G.log.filter((e) => e.kind === 'duel').length, fell = Object.values(G.factions).filter((x) => !x.alive).length;
-  const m = modal(`<h2>${won ? t('unified') : t('undecided')}</h2>
+  const m = modal(`<h2>${mineWon ? t('realmWon') : won ? t('unified') : t('undecided')}</h2>
     ${won ? `<div class="big" style="color:${f.color}">${esc(N(lord.name))} · ${dateStr(G.year, G.month, lang)}</div>` : ''}
     <p>${G.year - G.start} ${t('years')} · ${wars} ${t('wars')} · ${duels} ${t('duelsN')} · ${fell} ${t('fallenN')}</p>
     <div class="row2"><button class="btn" id="ekeep">${t('keepWatching')}</button><button class="btn go" id="enew">${t('newGame')}</button></div>`);
@@ -277,7 +356,7 @@ addEventListener('keydown', (e) => {
 
 // ---------------------------------------------------------------- go
 document.documentElement.lang = lang === 'en' ? 'en' : 'zh-Hant';
-start(+q.get('seed') || Math.floor(Math.random() * 99999), undefined, q.get('sc') || '190');
+start(+q.get('seed') || Math.floor(Math.random() * 99999), undefined, q.get('sc') || '190', q.get('pl') || null);
 if (!q.get('seed')) showNew(true);
 requestAnimationFrame(frame);
-window.__sg = { get G() { return G; }, advance, setSpeed: (s) => { speed = s; }, showGen: (id) => { ui.gen = id; ui.fac = null; renderPane(); } };   // for tests
+window.__sg = { get G() { return G; }, advance, answer, start, setSpeed: (s) => { speed = s; }, showGen: (id) => { ui.gen = id; ui.fac = null; renderPane(); } };   // for tests

@@ -3,6 +3,11 @@
 //
 //   const G = newGame({ seed, start: 190 });  step(G);  // one month
 //   G.log: the chronicle   G.cities / G.factions / G.gens: the world   G.over: the winner once China is unified
+//
+// Playing a warlord: newGame({ player: 'caocao' }). That faction's generals then bring some of their plans to the lord as
+// proposals (G.pending) instead of acting on their own: a few domestic jobs each month, every attack, every diplomatic move,
+// treasures to hand out and captives to judge. decide(G, yes, choice) answers the first one; autoDecide(G) answers whatever
+// G.auto allows (mode 'manual' | 'smart' | 'all', askWar). Unanswered proposals lapse when the next month begins.
 import { GENERALS_RAW } from '../data/generals.js';
 import { CITIES, ROADS } from '../data/world.js';
 import { PREFER } from '../data/allegiance.js';
@@ -88,6 +93,8 @@ export function newGame(o = {}) {
     if (h) give(G, it, G.byName[h[0]]);
     else if (hideIn) it.city = hideIn === '*' ? Math.floor(r() * G.cities.length) : byName[hideIn].id;
   }
+  // the warlord the player rules (null: just watch)
+  G.player = o.player && G.factions[o.player] ? o.player : null; G.pending = []; G.decided = []; G.auto = { mode: 'manual', askWar: true }; G.nextProp = 1;
   record(G, 'start', 'start', { s: S.id }, null, 3);
   snapshot(G);
   return G;
@@ -134,9 +141,45 @@ function record(G, kind, key, p, fac, level = 1, extra = {}) { G.log.push({ t: G
 function pickGovernor(G, c) { const gs = gensIn(G, c); const lord = c.owner && G.gens[G.factions[c.owner].lord]; c.gov = lord && lord.city === c.id && lord.status === 'serving' ? lord.id : gs.length ? maxBy(gs, (g) => g.lead + g.pol + g.cha).id : null; }
 function snapshot(G) { const s = { t: G.t, year: G.year, f: {} }; for (const f of Object.values(G.factions)) if (f.alive) s.f[f.id] = citiesOf(G, f.id).length; G.history.push(s); }
 
+// ---------------------------------------------------------------- the player's court: proposals and decisions
+const isMine = (G, f) => !!G.player && f.id === G.player;
+function propose(G, prop) { prop.id = G.nextProp++; prop.t = G.t; prop.p = prop.p || {}; G.pending.push(prop); }
+// last month's unanswered proposals lapse; captives waiting for judgement are let go
+function lapse(G) {
+  for (const prop of G.pending) if (prop.type === 'captive') { const x = G.gens[prop.x]; if (x.held) { x.held = null; x.city = pick(G.r, G.cities[x.city].adj); } }
+  G.pending = [];
+}
+const snap = (c, f) => ({ farm: c.farm, comm: c.comm, def: c.def, morale: c.morale, train: c.train, troops: c.troops, gold: f.gold });
+// answer the first proposal: yes = approve, or choice = one of its extra options (e.g. 'execute')
+export function decide(G, yes, choice) {
+  const prop = G.pending.shift(); if (!prop) return null;
+  const n0 = G.log.length, g = G.gens[prop.g];
+  let res;
+  if (!prop.valid()) res = { void: true };
+  else if ((yes || choice) && prop.cost && G.factions[G.player].gold < prop.cost) res = { broke: true };
+  else if (yes || choice) { res = { ok: true, ...(prop.run(choice || true) || {}) }; if (g && g.status === 'serving') g.merit += 1; }
+  else {
+    if (prop.reject) prop.reject();
+    if (g && g.status === 'serving' && g.fac === G.player && g.id !== G.factions[G.player].lord) g.loyalty = Math.max(0, g.loyalty - 1 - Math.floor(G.r() * 2));
+    res = { rejected: true };
+  }
+  res.prop = prop; res.logs = G.log.slice(n0); res.year = G.year; res.month = G.month;
+  G.decided.push(res); if (G.decided.length > 15) G.decided.shift();
+  return res;
+}
+// what the automatic answer would be (null: ask the player)
+export function autoAnswer(G, prop) {
+  const m = G.auto.mode;
+  if (m === 'manual' || (prop.type === 'war' && G.auto.askWar)) return null;
+  return m === 'all' ? true : !!prop.smart;
+}
+export function autoDecide(G) { const out = []; while (G.pending.length) { const a = autoAnswer(G, G.pending[0]); if (a === null) break; out.push(decide(G, a)); } return out; }
+const alive = (G, fid) => !!(G.factions[fid] && G.factions[fid].alive);
+
 // ---------------------------------------------------------------- one month
 export function step(G) {
   if (G.over) return G;
+  lapse(G);
   lifecycle(G);
   economy(G);
   events(G);
@@ -246,6 +289,9 @@ function frontDist(G, fid) {   // steps from each city to the nearest hostile ci
 }
 function domestic(G, f) {
   const r = G.r, cs = citiesOf(G, f.id), dist = frontDist(G, f.id), lord = lordOf(G, f.id);
+  // the player's realm: a few generals, chosen at random, ask the lord before they act (the rest get on with their work)
+  const asks = new Set();
+  if (isMine(G, f)) { const pool = shuffle(G, gensOf(G, f.id).filter((g) => g.id !== f.lord)); for (const g of pool.slice(0, clamp(2 + Math.floor(pool.length / 10), 2, 5))) asks.add(g.id); }
   for (const c of cs) {
     const gs = gensIn(G, c).sort((a, b) => b.pol + b.lead - (a.pol + a.lead)), isFront = dist.get(c.id) === 0;
     const want = Math.min(capacity(c), isFront ? 9000 + c.size * 5000 : 3000 + c.size * 1500);
@@ -268,6 +314,7 @@ function domestic(G, f) {
       // each job gets a little random jitter once (a random sort comparator would make replays differ between browsers)
       if (!jobs.some((j) => j[1] > 0)) continue;
       const [job] = maxBy(jobs.map(([k, v]) => [k, v + (r() - 0.5) * 20]), (j) => j[1]);
+      if (asks.has(g.id)) { propose(G, jobProposal(G, f, c, g, job, free)); continue; }
       g.task = job; doJob(G, f, c, g, job, free);
     }
     // a capital with no general still grows slowly
@@ -278,9 +325,28 @@ function domestic(G, f) {
   if (G.month % 6 === 1) for (const it of G.items.filter((x) => x.fac === f.id)) {
     const fit = (g) => (it.slot === 'b' ? g.int + g.lead : it.slot === 't' ? g.cha + g.pol : g.war + g.lead) + (100 - g.loyalty) * 0.5;
     const g = maxBy(gensOf(G, f.id).filter((m) => !holds(G, m, it.slot)), fit); if (!g) continue;
+    if (isMine(G, f)) {
+      const adv = maxBy(gensOf(G, f.id).filter((m) => m.id !== f.lord), (m) => m.pol + m.int) || lord;
+      propose(G, { type: 'item', g: adv.id, city: g.city, x: g.id, smart: true, p: { g: adv.name, x: g.name, it: it.key },
+        valid: () => it.fac === f.id && g.status === 'serving' && g.fac === f.id && !holds(G, g, it.slot),
+        run: () => { give(G, it, g); g.loyalty = Math.min(100, g.loyalty + 10); record(G, 'item', 'itemGive', { x: lordOf(G, f.id).name, g: g.name, it: it.key }, f.id, 1, { g: g.id }); } });
+      continue;
+    }
     give(G, it, g); g.loyalty = Math.min(100, g.loyalty + 10);
     record(G, 'item', 'itemGive', { x: lord.name, g: g.name, it: it.key }, f.id, 1, { g: g.id });
   }
+}
+function jobProposal(G, f, c, g, job, free) {
+  const x = job === 'recruitGen' ? maxBy(free, (y) => y.lead + y.war + y.int + y.pol + y.cha + (y.known ? 50 : 0)) : null;
+  // what the job costs the treasury (approving it without the gold does nothing)
+  const cost = { farm: 20, comm: 20, def: 20, morale: 10, reward: 40, search: 10, draft: 120 }[job] || 0;
+  return { type: 'job', job, g: g.id, city: c.id, smart: true, cost, p: { g: g.name, c: c.name, x: x && x.name },
+    valid: () => g.status === 'serving' && g.fac === f.id && g.city === c.id && c.owner === f.id && alive(G, f.id),
+    run: () => {
+      const before = snap(c, f); g.task = job; doJob(G, f, c, g, job, freeIn(G, c));
+      const after = snap(c, f), d = Object.keys(before).filter((k) => after[k] !== before[k]).map((k) => [k, after[k] - before[k]]);
+      return { key: 'jobDone', p: { g: g.name, c: c.name, job, d } };
+    } };
 }
 function doJob(G, f, c, g, job, free) {
   const r = G.r;
@@ -338,10 +404,18 @@ function diplomacy(G, f) {
     // demand surrender from a much weaker neighbour
     // (great warlords never bow; minor ones may, once the realm has settled a little)
     const pride = olord.lead + olord.war + olord.int + olord.cha;
-    if (G.year >= 192 && pride < 250 && me > them * 6 && citiesOf(G, oid).length <= 2 && r() < 0.025 + (envoy.cha + lord.cha - olord.cha) / 4000) { absorb(G, f, o, envoy); return; }
+    if (G.year >= 192 && pride < 250 && me > them * 6 && citiesOf(G, oid).length <= 2 && r() < 0.025 + (envoy.cha + lord.cha - olord.cha) / 4000) {
+      if (isMine(G, f)) { propose(G, { type: 'absorb', g: envoy.id, smart: true, p: { g: envoy.name, o: o.name, x: olord.name },
+        valid: () => alive(G, o.id) && alive(G, f.id) && envoy.status === 'serving' && envoy.fac === f.id, run: () => absorb(G, f, o, envoy) }); return; }
+      absorb(G, f, o, envoy); return;
+    }
     // betray an ally that has become weak and is the only way to grow
-    if (f.allies[oid] > G.t && me > them * 3 && r() < 0.06 * f.aggr) { delete f.allies[oid]; delete o.allies[f.id]; f.rel[oid] = o.rel[f.id] = -60;
-      record(G, 'diplo', 'betray', { g: lord.name, x: olord.name }, f.id, 2); continue; }
+    if (f.allies[oid] > G.t && me > them * 3 && r() < 0.06 * f.aggr) {
+      const betray = () => { delete f.allies[oid]; delete o.allies[f.id]; f.rel[oid] = o.rel[f.id] = -60; record(G, 'diplo', 'betray', { g: lordOf(G, f.id).name, x: lordOf(G, oid).name }, f.id, 2); };
+      if (isMine(G, f)) propose(G, { type: 'betray', g: envoy.id, smart: true, p: { g: envoy.name, o: o.name }, valid: () => alive(G, oid) && f.allies[oid] > G.t, run: betray });
+      else betray();
+      continue;
+    }
   }
   // look for an ally against the strongest neighbour
   const threat = maxBy([...neighbours].filter((o) => !allied(G, f.id, o)), (o) => power(G, o));
@@ -349,21 +423,30 @@ function diplomacy(G, f) {
     const cand = Object.values(G.factions).filter((o) => o.alive && o.id !== f.id && o.id !== threat && !(f.allies[o.id] > G.t) && citiesOf(G, o.id).some((c) => c.adj.some((a) => G.cities[a].owner === threat)));
     const o = maxBy(cand, (x) => power(G, x.id) + (f.rel[x.id] || 0) * 300);
     if (o && r() < 0.12 + ((f.rel[o.id] || 0) + (envoy.int + envoy.pol) / 2 - 50) / 250) {
-      f.allies[o.id] = o.allies[f.id] = G.t + 36; f.rel[o.id] = o.rel[f.id] = Math.min(100, (f.rel[o.id] || 0) + 30);
-      record(G, 'diplo', 'ally', { f: f.name, o: o.name, t: G.factions[threat].name, g: envoy.name }, f.id, 2);
+      const ally = () => { f.allies[o.id] = o.allies[f.id] = G.t + 36; f.rel[o.id] = o.rel[f.id] = Math.min(100, (f.rel[o.id] || 0) + 30);
+        record(G, 'diplo', 'ally', { f: f.name, o: o.name, t: G.factions[threat].name, g: envoy.name }, f.id, 2); };
+      if (isMine(G, f)) propose(G, { type: 'ally', g: envoy.id, smart: true, p: { g: envoy.name, o: o.name, t: G.factions[threat].name }, valid: () => alive(G, o.id) && alive(G, f.id) && !(f.allies[o.id] > G.t), run: ally });
+      else ally();
     } else if (power(G, threat) > me * 2.5 && power(G, threat) < me * 6 && !(f.truce[threat] > G.t - 24) && r() < 0.05 + envoy.int / 1000) {   // a giant won't bother with a truce
-      const t = G.factions[threat]; f.truce[threat] = t.truce[f.id] = G.t + 12;
-      record(G, 'diplo', 'truce', { f: f.name, o: t.name }, f.id, 1);
+      const t = G.factions[threat], truce = () => { f.truce[threat] = t.truce[f.id] = G.t + 12; record(G, 'diplo', 'truce', { f: f.name, o: t.name }, f.id, 1); };
+      if (isMine(G, f)) propose(G, { type: 'truce', g: envoy.id, smart: true, p: { g: envoy.name, o: t.name }, valid: () => alive(G, threat) && alive(G, f.id), run: truce });
+      else truce();
     }
   }
   // lure away a disloyal general of a rival
   const target = G.gens.filter((g) => g.status === 'serving' && g.fac !== f.id && !allied(G, f.id, g.fac) && g.loyalty < 55 && G.factions[g.fac].lord !== g.id && !sameKin(G, g, lordOf(G, g.fac)))
     .sort((a, b) => b.lead + b.war + b.int - (a.lead + a.war + a.int))[0];
   if (target && r() < 0.15 + (envoy.cha - target.loyalty) / 250) {
-    const from = G.factions[target.fac], c = G.cities[target.city];
-    serve(G, target, f.id, f.capital, 70);
-    record(G, 'defect', 'defect', { g: target.name, x: envoy.name, o: from.name, f: f.name }, f.id, 2, { g: target.id });
-    if (c.gov === target.id) pickGovernor(G, c);
+    const from = G.factions[target.fac], fromId = target.fac;
+    const lure = () => {
+      const c = G.cities[target.city];
+      serve(G, target, f.id, f.capital, 70);
+      record(G, 'defect', 'defect', { g: target.name, x: envoy.name, o: from.name, f: f.name }, f.id, 2, { g: target.id });
+      if (c.gov === target.id) pickGovernor(G, c);
+    };
+    if (isMine(G, f)) propose(G, { type: 'lure', g: envoy.id, x: target.id, smart: true, p: { g: envoy.name, x: target.name, o: from.name },
+      valid: () => alive(G, f.id) && target.status === 'serving' && target.fac === fromId && G.factions[fromId].lord !== target.id, run: lure });
+    else lure();
   }
 }
 function absorb(G, f, o, envoy) {
@@ -403,9 +486,26 @@ function war(G, f) {
     // a realm far stronger overall can afford riskier sieges (this is what ends long stalemates)
     if (t.owner && !theirs.has(t.owner)) theirs.set(t.owner, power(G, t.owner));
     const edge = t.owner ? mine / Math.max(1, theirs.get(t.owner)) : 9, need = edge > 2.5 ? 0.9 : edge > 1.5 ? 1.0 : edge > 1.1 ? 1.1 : 1.2;
-    if (ratio > need) options.push({ t, from, send, troops, army, train, want: want * Math.min(2, edge / 2 + 0.5) });
+    if (ratio > need) options.push({ t, from, send, troops, army, train, ratio, need, want: want * Math.min(2, edge / 2 + 0.5) });
   }
   if (!options.length) return;
+  // the player's realm: the best plan goes to the lord (now and then, like the AI's own appetite for war)
+  if (isMine(G, f)) {
+    const o = options.sort((a, b) => b.want - a.want)[0];
+    if (o.t.owner === f.id || r() > 0.55 + lord.war / 500) return;
+    const target = o.t, ownerThen = target.owner, chance = Math.round(clamp(100 / (1 + Math.exp(-5 * (o.ratio - 1.05))), 3, 97));
+    propose(G, { type: 'war', g: o.army[0].id, city: o.from[0].id, target: target.id, from: o.from.map((c) => c.id), army: o.army.map((g) => g.id), smart: o.ratio > o.need * 1.15,
+      p: { g: o.army[0].name, c: o.from[0].name, t: target.name, o: ownerThen ? G.factions[ownerThen].name : null, troops: Math.round(o.troops / 100) * 100, chance, army: o.army.map((g) => g.name), from: o.from.map((c) => c.name) },
+      valid: () => alive(G, f.id) && target.owner === ownerThen && target.owner !== f.id && hostile(G, f.id, target.owner) && o.from.every((c) => c.owner === f.id) && o.army.some((g) => g.status === 'serving' && g.fac === f.id),
+      run: () => {
+        const army = o.army.filter((g) => g.status === 'serving' && g.fac === f.id), send = o.from.map((c, i) => Math.min(o.send[i], c.troops)), troops = sum(send, (x) => x);
+        f.food = Math.max(0, f.food - Math.round(troops / 60));
+        o.from.forEach((c, i) => { c.troops -= send[i]; });
+        siege(G, f, o.from, target, army, troops, send, o.train);
+        f.rest = G.t + 1 + Math.floor(G.r() * 3);
+      } });
+    return;
+  }
   const attacks = cs.length > 15 ? 2 : 1;
   for (const o of options.sort((a, b) => b.want - a.want).slice(0, attacks)) {
     if (o.t.owner === f.id || r() > 0.35 + lord.war / 500 + (f.aggr - 1) * 0.3) continue;
@@ -497,6 +597,21 @@ function captives(G, f, city, defGens, defFid) {
     if (escape && r() < 0.35 + (g.war + g.int) / 400 + (isLord ? 0.25 : 0) + (holds(G, g, 'h') ? 0.2 : 0)) { g.city = escape.id; continue; }
     // try to win the captive over
     const p = isLord ? 0.04 : clamp(0.25 + (lord.cha - g.loyalty) / 160 + (defFid && sameKin(G, g, lordOf(G, defFid)) ? -0.4 : 0), 0.03, 0.9);
+    // the player's lord decides: persuade, release or execute
+    if (isMine(G, f) && !isLord) {
+      g.status = 'free'; g.fac = null; g.city = city.id; g.loyalty = 0; g.held = f.id;
+      const adv = maxBy(gensOf(G, f.id).filter((m) => m.id !== f.lord), (m) => m.int) || lord;
+      propose(G, { type: 'captive', g: adv.id, x: g.id, city: city.id, smart: true, p: { g: adv.name, x: g.name, o: defFid ? G.factions[defFid].name : null, chance: Math.round(p * 100) }, extra: ['execute'],
+        valid: () => g.held === f.id && g.status === 'free' && alive(G, f.id),
+        run: (choice) => {
+          const me = lordOf(G, f.id); g.held = null;
+          if (choice === 'execute') { die(G, g, 'executed', me); return; }
+          if (G.r() < p) { serve(G, g, f.id, g.city, 55 + Math.round(G.r() * 20)); record(G, 'join', 'captive', { g: g.name, f: f.name }, f.id, g.lead + g.war + g.int + g.pol + g.cha > 360 ? 2 : 1, { g: g.id }); return; }
+          g.city = pick(G.r, G.cities[g.city].adj); record(G, 'release', 'refuse', { x: me.name, g: g.name }, f.id, 1, { g: g.id });
+        },
+        reject: () => { const me = lordOf(G, f.id); g.held = null; g.city = pick(G.r, G.cities[g.city].adj); record(G, 'release', 'release', { x: me.name, g: g.name }, f.id, 1, { g: g.id }); } });
+      continue;
+    }
     if (r() < p) {
       const old = defFid && G.factions[defFid];
       serve(G, g, f.id, city.id, 55 + Math.round(r() * 20));

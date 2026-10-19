@@ -1,6 +1,6 @@
 // The map: an ink-dark land with soft faction territories, rivers, roads, cities and the month's campaigns.
-import { citiesOf } from '../sim/engine.js?v=2';
-import { nameIn } from '../sim/text.js?v=2';
+import { citiesOf } from '../sim/engine.js?v=3';
+import { nameIn } from '../sim/text.js?v=3';
 
 // rough coastline (the sea lies east and south of it) and the great rivers, in map units (0-100)
 const COAST = [[96, 0], [97, 10], [92, 18], [88, 27], [93, 33], [90, 40], [89, 47], [94, 56], [97, 63], [96, 72], [94, 80], [86, 88], [70, 95], [55, 98], [42, 104], [100, 104], [100, 0]];
@@ -80,6 +80,19 @@ export function drawMap(c, G, v, ui, lang) {
     if (e.win) { c.strokeStyle = '#ffdc8a'; c.lineWidth = 2; for (let i = 0; i < 8; i++) { const an = i * Math.PI / 4; c.beginPath(); c.moveTo(Math.cos(an) * 10, Math.sin(an) * 10); c.lineTo(Math.cos(an) * 17, Math.sin(an) * 17); c.stroke(); } }
     else { c.strokeStyle = '#9ad'; c.lineWidth = 2; c.beginPath(); c.arc(0, 0, 13, 0, 7); c.stroke(); }
     c.restore();
+  }
+  // a campaign waiting for the player's word: dashed, pulsing arrows and a ring round the target
+  if (ui.plan) {
+    const t = G.cities[ui.plan.to], col = G.factions[ui.plan.fac] ? G.factions[ui.plan.fac].color : '#fff', pulse = 0.55 + 0.45 * Math.sin(performance.now() / 260);
+    for (const sid of ui.plan.from) {
+      const f = G.cities[sid], x0 = X(f.x), y0 = Y(f.y), x1 = X(t.x), y1 = Y(t.y), ang = Math.atan2(y1 - y0, x1 - x0), L = Math.hypot(x1 - x0, y1 - y0) - 10;
+      c.save(); c.translate(x0, y0); c.rotate(ang); c.globalAlpha = 0.5 + pulse * 0.5;
+      c.strokeStyle = col; c.lineWidth = 3; c.setLineDash([7, 6]); c.lineDashOffset = -performance.now() / 40; c.shadowColor = col; c.shadowBlur = 10;
+      c.beginPath(); c.moveTo(8, 0); c.quadraticCurveTo(L / 2, -L * 0.12, L, 0); c.stroke(); c.setLineDash([]);
+      c.fillStyle = col; c.beginPath(); c.moveTo(L + 2, 0); c.lineTo(L - 8, -6); c.lineTo(L - 6, 1); c.lineTo(L - 9, 6); c.fill();
+      c.restore();
+    }
+    c.save(); c.translate(X(t.x), Y(t.y)); c.strokeStyle = '#ff7a5a'; c.lineWidth = 2.5; c.globalAlpha = pulse; c.beginPath(); c.arc(0, 0, 14 + pulse * 5, 0, 7); c.stroke(); c.restore();
   }
   // cities
   const seat = new Set(Object.values(G.factions).filter((f) => f.alive).map((f) => G.gens[f.lord].city));

@@ -109,3 +109,24 @@ h3 { font-size: 15px; color: var(--gold); margin: 16px 0 6px; letter-spacing: 2p
 .tag.spell { border-color: #6a5aa8; color: #c8b8ff; cursor: default; }
 .hiddenTag { color: #ff9ad8; font-weight: 700; }
 #ndesc { color: var(--dim); font-size: 14px; min-height: 2.6em; }
+
+/* ---- the player's court (奏報) ---- */
+.realm { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 15px; margin-bottom: 8px; }
+.realm .dim { font-size: 13px; width: 100%; }
+.dim { color: var(--dim); }
+.autoset { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; color: var(--dim); padding: 8px 10px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; }
+.autoset label { display: inline-flex; align-items: center; gap: 6px; }
+.autoset select { background: #2a2620; color: var(--ink); border: 1px solid #4a4130; border-radius: 6px; padding: 3px 6px; font-family: inherit; }
+.prop { background: linear-gradient(#2a2318, #211c14); border: 1px solid var(--gold); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 0 18px rgba(216, 183, 106, .12); }
+.prop.idle { border-color: var(--line); box-shadow: none; background: var(--panel2); }
+.prop.idle p { margin: 0; color: var(--dim); line-height: 1.6; }
+.prop h3 { margin: 0; font-size: 19px; color: var(--gold2); letter-spacing: 1px; }
+.prop .who { display: flex; gap: 10px; align-items: center; }
+.prop .seal { width: 44px; height: 44px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 900; color: #fff; text-shadow: 0 1px 3px #000; border: 2px solid rgba(0, 0, 0, .45); flex: none; }
+.prop .say { margin: 0; font-size: 16px; line-height: 1.7; }
+.prop .meta { margin: 0; font-size: 13px; color: var(--dim); line-height: 1.6; }
+.prop .meta .hi { color: #8fd88a; } .prop .meta .mid { color: var(--gold2); } .prop .meta .lo { color: #f08a70; }
+.prop .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.prop .btns .btn { flex: 1; min-width: 90px; }
+.btn.danger { background: #4a1f18; border-color: var(--red); color: #ffd8c8; }
+.ev.dec.no { opacity: .7; }

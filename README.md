@@ -4,7 +4,18 @@ A self-running Romance of the Three Kingdoms simulation in the browser. **500 hi
 fight and grow old while the warlords of AD 190 run their realms on their own: **domestic affairs, diplomacy and war**, month
 by month, until someone unifies the realm (or the age of warlords drags on to 300). You watch history unfold.
 
-**Play:** https://ywchen0711.github.io/sanguo-sim/  (Chinese and English; `?seed=123` replays the same history)
+**Play:** https://ywchen0711.github.io/sanguo-sim/  (Chinese and English; `?seed=123` replays the same history, `&pl=cao` plays as 曹操)
+
+## Play as a warlord
+
+Pick a warlord in **新的天下 New game** (or choose to just watch). Your generals keep running the realm, but each month a few of them,
+chosen at random, bring their plans to you as proposals in the **奏報 Court** tab: farming, trade, walls, patrols, training, drafting,
+rewards, searching and recruiting talent. Every campaign your commanders plan (with the odds and who marches), every diplomatic move
+(alliances, truces, luring officers away, demanding surrender, breaking an alliance), every treasure to hand out and every captive
+(win over, release or execute) also waits for your word. **准奏 Approve** or **駁回 Reject**: a rejected general's loyalty dips a little,
+and the game pauses whenever a proposal waits. **自動回覆 Answer proposals** can be manual, smart (do what a sensible lord would) or
+approve everything, with *always ask me about attacks* to keep the big decisions yours. Unanswered proposals lapse the next month.
+`tools/court.mjs` plays warlords through the court and checks it.
 
 ## What happens
 
